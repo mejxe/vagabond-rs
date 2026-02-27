@@ -1,7 +1,7 @@
 use crate::bitboard::BitBoard;
 use crate::bitboard::Square;
 use crate::board::Color;
-use crate::board::Piece;
+use crate::board::PieceType;
 
 pub const NOT_A_COLUMN: BitBoard = {
     let mut tbl = BitBoard(u64::MAX);
@@ -143,15 +143,15 @@ pub const fn generate_pawn_atk(color: Color, square: Square) -> BitBoard {
     attack
 }
 
-pub const fn generate_leaper_table(piece: Piece, color: Option<Color>) -> [BitBoard; 64] {
+pub const fn generate_leaper_table(piece: PieceType, color: Option<Color>) -> [BitBoard; 64] {
     let mut attack_table: [BitBoard; 64] = [BitBoard(0); 64];
     let mut i = 0u8;
     while i < 64u8 {
         let square = Square::from_u8_unchecked(i);
         attack_table[i as usize] = match piece {
-            Piece::Knight => generate_knight_atk(square),
-            Piece::King => generate_king_atk(square),
-            Piece::Pawn => {
+            PieceType::Knight => generate_knight_atk(square),
+            PieceType::King => generate_king_atk(square),
+            PieceType::Pawn => {
                 let color = color.expect("should be provided");
                 generate_pawn_atk(color, square)
             }
@@ -161,7 +161,9 @@ pub const fn generate_leaper_table(piece: Piece, color: Option<Color>) -> [BitBo
     }
     attack_table
 }
-pub const KING_ATK_TABLE: [BitBoard; 64] = generate_leaper_table(Piece::King, None);
-pub const KNIGHT_ATK_TABLE: [BitBoard; 64] = generate_leaper_table(Piece::Knight, None);
-pub const W_PAWN_ATK_TABLE: [BitBoard; 64] = generate_leaper_table(Piece::Pawn, Some(Color::White));
-pub const B_PAWN_ATK_TABLE: [BitBoard; 64] = generate_leaper_table(Piece::Pawn, Some(Color::Black));
+pub const KING_ATK_TABLE: [BitBoard; 64] = generate_leaper_table(PieceType::King, None);
+pub const KNIGHT_ATK_TABLE: [BitBoard; 64] = generate_leaper_table(PieceType::Knight, None);
+pub const W_PAWN_ATK_TABLE: [BitBoard; 64] =
+    generate_leaper_table(PieceType::Pawn, Some(Color::White));
+pub const B_PAWN_ATK_TABLE: [BitBoard; 64] =
+    generate_leaper_table(PieceType::Pawn, Some(Color::Black));

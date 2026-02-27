@@ -1,87 +1,242 @@
+use std::arch::x86_64::_pext_u64;
+use std::sync::OnceLock;
+
 use crate::bitboard::BitBoard;
 use crate::bitboard::Square;
-use crate::board::Piece;
+use crate::board::PieceType;
 
-pub const ROOK_OCCUPANCY_TABLE: [BitBoard; 64] = generate_slider_occupancy(Piece::Rook);
+use super::move_generator::Occupancy;
 
-const fn generate_slider_occupancy(piece: Piece) -> [BitBoard; 64] {
-    let mut attack_table: [BitBoard; 64] = [BitBoard(0); 64];
-    let mut i = 0u8;
-    while i < 64u8 {
-        let square = Square::from_u8_unchecked(i);
-        attack_table[i as usize] = match piece {
-            Piece::Rook => generate_rook_occupancy(square),
-            Piece::Bishop => generate_bishop_occupancy(square),
-            _ => panic!("Not a leaper."),
-        };
-        i += 1;
-    }
-    attack_table
-}
+pub const ROOK_MASK_TABLE: [BitBoard; 64] = Occupancy::generate_slider_mask_tbl(PieceType::Rook);
+pub const BISHOP_MASK_TABLE: [BitBoard; 64] =
+    Occupancy::generate_slider_mask_tbl(PieceType::Bishop);
 
-pub const fn generate_rook_occupancy(square: Square) -> BitBoard {
+pub const fn generate_rook_mask(square: Square) -> BitBoard {
     let mut attacks = BitBoard(0);
     let mut piece_pos = BitBoard(0);
     piece_pos.set_bit(square);
-    let mut r = (square as u8) / 8;
-    let mut c = (square as u8) % 8;
+    let mut c = (square as i8) % 8;
 
+    // up
+    let mut r = (square as i8) / 8 + 1;
     while r < 7 {
-        attacks.set_bit(Square::from_u8_unchecked(r * 8 + c));
+        attacks.set_bit(Square::from_u8_unchecked((r * 8 + c) as u8));
         r += 1;
     }
-    r = (square as u8) / 8;
+    // down
+
+    r = ((square as i8) / 8) - 1;
     while r > 0 {
-        attacks.set_bit(Square::from_u8_unchecked(r * 8 + c));
+        attacks.set_bit(Square::from_u8_unchecked((r * 8 + c) as u8));
         r -= 1;
     }
-    r = (square as u8) / 8;
+    r = (square as i8) / 8;
+    // right
+
+    c = (square as i8) % 8 + 1;
     while c < 7 {
-        attacks.set_bit(Square::from_u8_unchecked(r * 8 + c));
+        attacks.set_bit(Square::from_u8_unchecked((r * 8 + c) as u8));
         c += 1;
     }
-    c = (square as u8) % 8;
+    // left
+
+    c = ((square as i8) % 8) - 1;
     while c > 0 {
-        attacks.set_bit(Square::from_u8_unchecked(r * 8 + c));
+        attacks.set_bit(Square::from_u8_unchecked((r * 8 + c) as u8));
         c -= 1;
     }
     attacks
 }
-pub const fn generate_bishop_occupancy(square: Square) -> BitBoard {
+pub const fn generate_bishop_mask(square: Square) -> BitBoard {
     let mut attacks = BitBoard(0);
     let mut piece_pos = BitBoard(0);
     piece_pos.set_bit(square);
-    let mut r = (square as u8) / 8;
-    let mut c = (square as u8) % 8;
+    let mut r = (square as i8) / 8 + 1;
+    let mut c = (square as i8) % 8 + 1;
     // ++
     while r < 7 && c < 7 {
-        attacks.set_bit(Square::from_u8_unchecked(r * 8 + c));
+        attacks.set_bit(Square::from_u8_unchecked((r * 8 + c) as u8));
         r += 1;
         c += 1;
     }
     //+-
-    r = (square as u8) / 8;
-    c = (square as u8) % 8;
+    r = (square as i8) / 8 + 1;
+    c = (square as i8) % 8 - 1;
     while r < 7 && c > 0 {
-        attacks.set_bit(Square::from_u8_unchecked(r * 8 + c));
+        attacks.set_bit(Square::from_u8_unchecked((r * 8 + c) as u8));
         r += 1;
         c -= 1;
     }
-    r = (square as u8) / 8;
-    c = (square as u8) % 8;
     // -+
+    r = (square as i8) / 8 - 1;
+    c = (square as i8) % 8 + 1;
     while r > 0 && c < 7 {
-        attacks.set_bit(Square::from_u8_unchecked(r * 8 + c));
+        attacks.set_bit(Square::from_u8_unchecked((r * 8 + c) as u8));
         r -= 1;
         c += 1;
     }
-    r = (square as u8) / 8;
-    c = (square as u8) % 8;
     // --
+    r = (square as i8) / 8 - 1;
+    c = (square as i8) % 8 - 1;
     while r > 0 && c > 0 {
-        attacks.set_bit(Square::from_u8_unchecked(r * 8 + c));
+        attacks.set_bit(Square::from_u8_unchecked((r * 8 + c) as u8));
         r -= 1;
         c -= 1;
     }
     attacks
+}
+pub const fn generate_rook_attacks(square: Square, blockers: BitBoard) -> BitBoard {
+    let mut attacks = BitBoard(0);
+    let mut piece_pos = BitBoard(0);
+    piece_pos.set_bit(square);
+    let mut c = (square as i8) % 8;
+
+    // up
+    let mut r = (square as i8) / 8 + 1;
+    while r <= 7 {
+        attacks.set_bit(Square::from_u8_unchecked((r * 8 + c) as u8));
+        if blockers.check_bit(Square::from_u8_unchecked((r * 8 + c) as u8)) {
+            break;
+        }
+        r += 1;
+    }
+    // down
+
+    r = ((square as i8) / 8) - 1;
+    while r >= 0 {
+        attacks.set_bit(Square::from_u8_unchecked((r * 8 + c) as u8));
+        if blockers.check_bit(Square::from_u8_unchecked((r * 8 + c) as u8)) {
+            break;
+        }
+        r -= 1;
+    }
+    r = (square as i8) / 8;
+    // right
+
+    c = (square as i8) % 8 + 1;
+    while c <= 7 {
+        attacks.set_bit(Square::from_u8_unchecked((r * 8 + c) as u8));
+        if blockers.check_bit(Square::from_u8_unchecked((r * 8 + c) as u8)) {
+            break;
+        }
+        c += 1;
+    }
+    // left
+
+    c = ((square as i8) % 8) - 1;
+    while c >= 0 {
+        attacks.set_bit(Square::from_u8_unchecked((r * 8 + c) as u8));
+        if blockers.check_bit(Square::from_u8_unchecked((r * 8 + c) as u8)) {
+            break;
+        }
+        c -= 1;
+    }
+    attacks
+}
+pub const fn generate_bishop_attacks(square: Square, blockers: BitBoard) -> BitBoard {
+    let mut attacks = BitBoard(0);
+    let mut piece_pos = BitBoard(0);
+    piece_pos.set_bit(square);
+    let mut r = ((square as i8) / 8 + 1);
+    let mut c = ((square as i8) % 8 + 1);
+    // ++
+    while r <= 7 && c <= 7 {
+        attacks.set_bit(Square::from_u8_unchecked((r * 8 + c) as u8));
+        if blockers.check_bit(Square::from_u8_unchecked((r * 8 + c) as u8)) {
+            break;
+        }
+        r += 1;
+        c += 1;
+    }
+    //+-
+    r = (square as i8) / 8 + 1;
+    c = (square as i8) % 8 - 1;
+    while r <= 7 && c >= 0 {
+        attacks.set_bit(Square::from_u8_unchecked((r * 8 + c) as u8));
+        if blockers.check_bit(Square::from_u8_unchecked((r * 8 + c) as u8)) {
+            break;
+        }
+        r += 1;
+        c -= 1;
+    }
+    // -+
+    r = (square as i8) / 8 - 1;
+    c = (square as i8) % 8 + 1;
+    while r >= 0 && c <= 7 {
+        attacks.set_bit(Square::from_u8_unchecked((r * 8 + c) as u8));
+        if blockers.check_bit(Square::from_u8_unchecked((r * 8 + c) as u8)) {
+            break;
+        }
+        r -= 1;
+        c += 1;
+    }
+    r = (square as i8) / 8 - 1;
+    c = (square as i8) % 8 - 1;
+    // --
+    while r >= 0 && c >= 0 {
+        // useless but readable
+        attacks.set_bit(Square::from_u8_unchecked((r * 8 + c) as u8));
+        if blockers.check_bit(Square::from_u8_unchecked((r * 8 + c) as u8)) {
+            break;
+        }
+        r -= 1;
+        c -= 1;
+    }
+    attacks
+}
+
+const fn generate_pext(val: BitBoard, mut mask: BitBoard) -> u64 {
+    let mut ret = 0u64;
+    let mut rightmost_empty_bit = 0;
+    while mask.0 != 0 {
+        let lsb = 1 << mask.0.leading_zeros();
+        mask.0 |= mask.0 - 1;
+        if (val.0 & lsb) != 0 {
+            ret |= 1 << rightmost_empty_bit;
+            rightmost_empty_bit += 1
+        }
+    }
+    ret
+}
+
+pub mod tests {
+    use std::arch::x86_64::_pext_u64;
+
+    use crate::bitboard::BitBoard;
+    use crate::board::PieceType;
+    use crate::moves::move_generator::Occupancy;
+    use crate::moves::sliders::ROOK_MASK_TABLE;
+    use crate::moves::sliders::generate_bishop_attacks;
+    use crate::moves::sliders::generate_bishop_mask;
+    use crate::moves::sliders::generate_pext;
+    use crate::moves::sliders::generate_rook_mask;
+
+    use super::Square;
+    use super::generate_rook_attacks;
+
+    #[test]
+    fn test_rook_attack() {
+        let rook_atk = generate_rook_attacks(Square::A1, BitBoard(0));
+        println!("{}", rook_atk);
+        let rook_mask = generate_rook_mask(Square::B1);
+        println!("{}", rook_mask);
+        let bishop_mask = generate_bishop_mask(Square::E5);
+        println!("{}", bishop_mask);
+        let bishop_atk = generate_bishop_attacks(Square::E5, BitBoard(0));
+        println!("{}", bishop_atk);
+        assert!(false);
+    }
+    #[test]
+    fn test_software_pext_generation() {
+        let mask = ROOK_MASK_TABLE[Square::A1 as usize];
+        let bits_in_mask = mask.0.count_ones() as u8;
+        let mut variant = 0u32;
+        while variant < (1 << bits_in_mask) {
+            let occupancy = Occupancy::get_nth_occupancy_for_mask(mask, variant, bits_in_mask);
+            variant += 1;
+            let index = generate_pext(occupancy, mask);
+            println!("{:0b}", index)
+        }
+        assert!(false);
+    }
 }
