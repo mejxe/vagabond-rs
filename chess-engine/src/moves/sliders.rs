@@ -189,7 +189,7 @@ const fn generate_pext(val: BitBoard, mut mask: BitBoard) -> u64 {
     let mut ret = 0u64;
     let mut rightmost_empty_bit = 0;
     while mask.0 != 0 {
-        let lsb = 1 << mask.0.leading_zeros();
+        let lsb = 1 << mask.0.trailing_zeros();
         mask.0 |= mask.0 - 1;
         if (val.0 & lsb) != 0 {
             ret |= 1 << rightmost_empty_bit;

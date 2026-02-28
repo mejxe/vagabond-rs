@@ -41,3 +41,26 @@ impl BitBoard {
         }
     }
 }
+pub struct BitBoardIterator {
+    bits: u64,
+}
+impl Iterator for BitBoardIterator {
+    type Item = Square;
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.bits != 0 {
+            let index = self.bits.trailing_zeros() as u8;
+            self.bits &= self.bits - 1;
+            Some(Square::from_u8_unchecked(index))
+        } else {
+            None
+        }
+    }
+}
+impl IntoIterator for BitBoard {
+    type Item = Square;
+    type IntoIter = BitBoardIterator;
+    fn into_iter(self) -> Self::IntoIter {
+        BitBoardIterator { bits: self.0 }
+    }
+}

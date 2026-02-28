@@ -22,8 +22,8 @@ const BLACK_STARTING_BOARD_BY_PIECE: [BitBoard; 6] = [
 ];
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Piece {
-    piece_type: PieceType,
-    color: Color,
+    pub piece_type: PieceType,
+    pub color: Color,
 }
 impl Display for Piece {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -168,7 +168,33 @@ impl Board {
         }
         mailbox
     }
+
+    pub fn all_occupied(&self) -> BitBoard {
+        self.all_occupied
+    }
+
+    pub fn white_occupied(&self) -> BitBoard {
+        self.white_occupied
+    }
+
+    pub fn black_occupied(&self) -> BitBoard {
+        self.black_occupied
+    }
+
+    pub fn get_pieces(&self, piece_type: PieceType, color: Color) -> BitBoard {
+        match color {
+            Color::White => self.white_pieces[piece_type as usize],
+            Color::Black => self.black_pieces[piece_type as usize],
+        }
+    }
+    pub fn get_color_occupied(&self, color: Color) -> BitBoard {
+        match color {
+            Color::White => self.white_occupied,
+            Color::Black => self.black_occupied,
+        }
+    }
 }
+// TODO: Add fen parsing
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Color {
     White,

@@ -25,7 +25,7 @@ pub fn create_board_enum(items: TokenStream) -> TokenStream {
     let name = input.name;
     for row in 0..8u8 {
         for _ in 0..8u8 {
-            let letter = letters.next().unwrap();
+            let letter = letters.next().expect("it works");
             let var_name = format_ident!("{}{}", letter, (row + 1));
             variants.push(var_name);
         }
