@@ -46,7 +46,7 @@ pub fn create_board_enum(items: TokenStream) -> TokenStream {
         impl std::error::Error for BoardError {}
 
         #[repr(u8)]
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
         pub enum #name {
             #(#variants),*
         }

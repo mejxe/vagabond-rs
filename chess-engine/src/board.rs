@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{fmt::Display, iter::MapWhile};
 
 use crate::bitboard::{BitBoard, Square};
 const ALL_STARTING_BOARD: BitBoard = BitBoard(18446462598732906495);
@@ -58,29 +58,28 @@ pub struct Board {
     mail_box: [Option<Piece>; 64],
 
     all_occupied: BitBoard,
+    occupied_by_color: [BitBoard; 2],
 
-    white_occupied: BitBoard,
-    black_occupied: BitBoard,
+    // index with [Piece as usize] (same order as Piece)
+    pieces: [[BitBoard; 6]; 2],
 
-    // index with Piece as usize (same order as Piece)
-    white_pieces: [BitBoard; 6],
-    black_pieces: [BitBoard; 6],
+    castling_rights: [bool; 2],
+    en_passant_square: Option<Square>,
 }
 impl Default for Board {
     fn default() -> Self {
         let all_occupied = ALL_STARTING_BOARD;
-        let white_occupied = WHITE_STARTING_BOARD;
-        let black_occupied = BLACK_STARTING_BOARD;
-        let white_pieces = WHITE_STARTING_BOARD_BY_PIECE;
-        let black_pieces = BLACK_STARTING_BOARD_BY_PIECE;
+        let occupied_by_color = [WHITE_STARTING_BOARD, BLACK_STARTING_BOARD];
+        let pieces = [WHITE_STARTING_BOARD_BY_PIECE, BLACK_STARTING_BOARD_BY_PIECE];
+        let castling_rights = [true, true];
 
         Board {
             mail_box: Board::fill_mail_box(),
             all_occupied,
-            white_occupied,
-            black_occupied,
-            white_pieces,
-            black_pieces,
+            pieces,
+            occupied_by_color,
+            castling_rights,
+            en_passant_square: None,
         }
     }
 }
@@ -172,26 +171,31 @@ impl Board {
     pub fn all_occupied(&self) -> BitBoard {
         self.all_occupied
     }
-
+    #[inline(always)]
     pub fn white_occupied(&self) -> BitBoard {
-        self.white_occupied
+        self.occupied_by_color[0]
     }
-
+    #[inline(always)]
     pub fn black_occupied(&self) -> BitBoard {
-        self.black_occupied
+        self.occupied_by_color[1]
     }
 
+    #[inline(always)]
     pub fn get_pieces(&self, piece_type: PieceType, color: Color) -> BitBoard {
-        match color {
-            Color::White => self.white_pieces[piece_type as usize],
-            Color::Black => self.black_pieces[piece_type as usize],
-        }
+        self.pieces[color as usize][piece_type as usize]
     }
-    pub fn get_color_occupied(&self, color: Color) -> BitBoard {
-        match color {
-            Color::White => self.white_occupied,
-            Color::Black => self.black_occupied,
-        }
+    #[inline(always)]
+    pub fn get_castling_rights(&self, color: Color) -> bool {
+        self.castling_rights[color as usize]
+    }
+
+    #[inline(always)]
+    pub fn en_passant_square(&self) -> Option<Square> {
+        self.en_passant_square
+    }
+
+    pub fn occupied_by_color(&self, color: Color) -> BitBoard {
+        self.occupied_by_color[color as usize]
     }
 }
 // TODO: Add fen parsing

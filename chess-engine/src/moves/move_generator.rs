@@ -9,7 +9,10 @@ use crate::{
     },
 };
 
-use super::leapers::{KING_ATK_TABLE, KNIGHT_ATK_TABLE};
+use super::{
+    leapers::{B_PAWN_ATK_TABLE, KING_ATK_TABLE, KNIGHT_ATK_TABLE, W_PAWN_ATK_TABLE},
+    traits::{Castle, PawnDirection, Side},
+};
 
 #[repr(transparent)]
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Copy, Clone)]
@@ -28,8 +31,17 @@ impl Move {
 pub enum MoveType {
     Quiet,
     Capture,
-    Castle,
-    Promotion,
+    KingSideCastle,
+    QueenSideCastle,
+    EnPassant,
+    BishopPromotion,
+    KnightPromotion,
+    RookPromotion,
+    QueenPromotion,
+    BishopCapturePromotion,
+    KnightCapturePromotion,
+    RookCapturePromotion,
+    QueenCaptureCapturePromotion,
 }
 pub struct MoveList {
     moves: [Move; 256],
@@ -50,6 +62,84 @@ pub struct MoveGenerator {
     bishop_atk: Vec<BitBoard>,
 }
 impl MoveGenerator {
+    fn fill_captures<S: Side + PawnDirection>(&self, move_list: &mut MoveList, board: &Board) {
+        let color = S::COLOR;
+        let pieces = [
+            Piece {
+                color,
+                piece_type: PieceType::Queen,
+            },
+            Piece {
+                color,
+                piece_type: PieceType::Rook,
+            },
+            Piece {
+                color,
+                piece_type: PieceType::Bishop,
+            },
+            Piece {
+                color,
+                piece_type: PieceType::Knight,
+            },
+            Piece {
+                color,
+                piece_type: PieceType::King,
+            },
+        ];
+        // captures
+        for piece in pieces {
+            self.generate_moves_for_piece(
+                piece,
+                board,
+                move_list,
+                board.occupied_by_color(color),
+                MoveType::Capture,
+            );
+        }
+        self.generate_capture_pawn_moves::<S>(color, board, move_list);
+        // TODO:  rate them and return if beta cutoff found
+        // if not get quiets
+    }
+    fn fill_quiets<S: Side + PawnDirection + Castle>(
+        &self,
+        move_list: &mut MoveList,
+        board: &Board,
+    ) {
+        let color = S::COLOR;
+        let pieces = [
+            Piece {
+                color,
+                piece_type: PieceType::Queen,
+            },
+            Piece {
+                color,
+                piece_type: PieceType::Rook,
+            },
+            Piece {
+                color,
+                piece_type: PieceType::Bishop,
+            },
+            Piece {
+                color,
+                piece_type: PieceType::Knight,
+            },
+            Piece {
+                color,
+                piece_type: PieceType::King,
+            },
+        ];
+        for piece in pieces {
+            self.generate_moves_for_piece(
+                piece,
+                board,
+                move_list,
+                board.occupied_by_color(color),
+                MoveType::Quiet,
+            );
+        }
+        self.generate_castle_moves::<S>(color, board, move_list); // TODO: Refactor to use color from the S trait
+        self.generate_quiet_pawn_moves::<S>(color, board, move_list);
+    }
     fn init_rook_atk_table() -> Vec<BitBoard> {
         let mut table = vec![BitBoard(0); 4096 * 64];
         let mut i = 0;
@@ -111,11 +201,15 @@ impl MoveGenerator {
 
         self.bishop_atk[offset_index]
     }
-    pub fn generate_moves_for_piece(&self, piece: Piece, board: &Board, move_list: &mut MoveList) {
-        let (friends, enemies) = match piece.color {
-            Color::White => (board.white_occupied(), board.black_occupied()),
-            Color::Black => (board.black_occupied(), board.white_occupied()),
-        };
+    pub fn generate_moves_for_piece(
+        &self,
+        piece: Piece,
+        board: &Board,
+        move_list: &mut MoveList,
+        target: BitBoard,
+        move_type: MoveType,
+    ) {
+        let friends = board.occupied_by_color(piece.color);
         let squares = board.get_pieces(PieceType::Bishop, piece.color);
         for square in squares {
             let attacks = match piece.piece_type {
@@ -129,8 +223,33 @@ impl MoveGenerator {
                         | self.get_bishop_atk(square, board.all_occupied()).0,
                 ),
             };
-            let filtered_attack = BitBoard(attacks.0 & !friends.0);
-            self.fill_moves(square, attacks, enemies, move_list);
+            let filtered_attacks = BitBoard(attacks.0 & !friends.0);
+            self.fill_moves(square, filtered_attacks, move_list, target, move_type);
+        }
+    }
+    pub fn generate_castle_moves<C: Castle>(
+        &self,
+        color: Color,
+        board: &Board,
+        move_list: &mut MoveList,
+    ) {
+        if !board.get_castling_rights(color) {
+            return;
+        };
+        let occupied = board.all_occupied();
+        if occupied.0 & !C::KING_SIDE.0 == 0 {
+            move_list.push(Move::new(
+                C::KING_START_POS,
+                C::KING_SIDE_KING_POS,
+                MoveType::KingSideCastle,
+            ));
+        }
+        if occupied.0 & !C::QUEEN_SIDE.0 == 0 {
+            move_list.push(Move::new(
+                C::KING_START_POS,
+                C::QUEEN_SIDE_KING_POS,
+                MoveType::QueenSideCastle,
+            ));
         }
     }
     #[inline(always)]
@@ -138,16 +257,13 @@ impl MoveGenerator {
         &self,
         from_square: Square,
         attacks: BitBoard,
-        enemies: BitBoard,
         move_list: &mut MoveList,
+        target: BitBoard,
+        move_type: MoveType,
     ) {
-        let empty_squares = BitBoard(attacks.0 & !enemies.0);
-        let enemy_squares = BitBoard(attacks.0 & enemies.0);
-        for to_square in enemy_squares {
-            move_list.push(Move::new(from_square, to_square, MoveType::Capture));
-        }
-        for to_square in empty_squares {
-            move_list.push(Move::new(from_square, to_square, MoveType::Capture));
+        let target_squares = BitBoard(attacks.0 & target.0);
+        for to_square in target_squares {
+            move_list.push(Move::new(from_square, to_square, move_type));
         }
     }
 
@@ -155,42 +271,110 @@ impl MoveGenerator {
         &self,
         color: Color,
         board: &Board,
-        move_list: &MoveList,
+        move_list: &mut MoveList,
     ) {
         // normal move forward
         let pawns = board.get_pieces(PieceType::Pawn, color);
         let empty = !board.all_occupied().0;
         let single_push = BitBoard((Dir::shift(pawns)).0 & empty);
-        let double_push = BitBoard(Dir::shift(single_push).0 & empty);
-        // TODO: Iterate through single push and double push and if not PROMO_RANK generate quiet moves and add to movelist
+        let double_push = BitBoard(
+            Dir::shift(BitBoard(
+                Dir::shift(BitBoard(pawns.0 & Dir::STARTING_RANK as u64)).0 & empty,
+            ))
+            .0 & empty,
+        );
+        let promotion = BitBoard((single_push.0 & Dir::PROMOTION_RANK as u64) & empty);
+        let not_promotion = BitBoard((single_push.0 & !Dir::PROMOTION_RANK as u64) & empty);
+        // promotions
+        for square in promotion {
+            move_list.push(Move::new(
+                Dir::get_source_double(square),
+                square,
+                MoveType::QueenPromotion,
+            ));
+            move_list.push(Move::new(
+                Dir::get_source_double(square),
+                square,
+                MoveType::RookPromotion,
+            ));
+            move_list.push(Move::new(
+                Dir::get_source_double(square),
+                square,
+                MoveType::KnightPromotion,
+            ));
+            move_list.push(Move::new(
+                Dir::get_source_double(square),
+                square,
+                MoveType::QueenPromotion,
+            ));
+        }
+        // double push
+        for square in double_push {
+            move_list.push(Move::new(
+                Dir::get_source_double(square),
+                square,
+                MoveType::Quiet,
+            ));
+        }
+        // single push
+        for square in not_promotion {
+            move_list.push(Move::new(
+                Dir::get_source_single(square),
+                square,
+                MoveType::Quiet,
+            ));
+        }
     }
-}
-pub trait PawnDirection {
-    const SHIFT: u8;
-    const DOUBLE_SHIFT: u8;
-    const STARTING_RANK: u8;
-    const PROMOTION_RANK: u8;
-
-    fn shift(bitboard: BitBoard) -> BitBoard;
-}
-struct WhitePawnDirection;
-struct BlackPawnDirection;
-impl PawnDirection for WhitePawnDirection {
-    const SHIFT: u8 = 8;
-    const DOUBLE_SHIFT: u8 = 16;
-    const STARTING_RANK: u8 = 1 << 2;
-    const PROMOTION_RANK: u8 = 1 << 7;
-    fn shift(bitboard: BitBoard) -> BitBoard {
-        BitBoard(bitboard.0 << Self::SHIFT)
-    }
-}
-impl PawnDirection for BlackPawnDirection {
-    const SHIFT: u8 = 8;
-    const DOUBLE_SHIFT: u8 = 16;
-    const STARTING_RANK: u8 = 1 >> 2;
-    const PROMOTION_RANK: u8 = 1 >> 7;
-    fn shift(bitboard: BitBoard) -> BitBoard {
-        BitBoard(bitboard.0 >> Self::SHIFT)
+    fn generate_capture_pawn_moves<Dir: PawnDirection>(
+        &self,
+        color: Color,
+        board: &Board,
+        move_list: &mut MoveList,
+    ) {
+        let pawns = board.get_pieces(PieceType::Pawn, color);
+        let (attack_table, enemies) = match color {
+            Color::White => (W_PAWN_ATK_TABLE, board.black_occupied()),
+            Color::Black => (B_PAWN_ATK_TABLE, board.white_occupied()),
+        };
+        for pawn_square in pawns {
+            let attacks = BitBoard(attack_table[pawn_square as usize].0 & enemies.0);
+            let promotions = BitBoard(attacks.0 & Dir::PROMOTION_RANK as u64);
+            let not_promotions = BitBoard(attacks.0 & !Dir::PROMOTION_RANK as u64);
+            if let Some(en_passant_square) = board.en_passant_square() {
+                if (1u64 << (en_passant_square as u64)) != 0 {
+                    move_list.push(Move::new(
+                        pawn_square,
+                        en_passant_square,
+                        MoveType::EnPassant,
+                    ));
+                }
+            }
+            for attack in promotions {
+                move_list.push(Move::new(
+                    pawn_square,
+                    attack,
+                    MoveType::QueenCaptureCapturePromotion,
+                ));
+                move_list.push(Move::new(
+                    pawn_square,
+                    attack,
+                    MoveType::RookCapturePromotion,
+                ));
+                move_list.push(Move::new(
+                    pawn_square,
+                    attack,
+                    MoveType::KnightCapturePromotion,
+                ));
+                move_list.push(Move::new(
+                    pawn_square,
+                    attack,
+                    MoveType::BishopCapturePromotion,
+                ));
+            }
+            for attack in not_promotions {
+                move_list.push(Move::new(pawn_square, attack, MoveType::Capture));
+            }
+        }
     }
 }
 
