@@ -62,6 +62,7 @@ pub trait Side {
     const COLOR: Color;
     const STARTING_RANK: u64;
     const PROMOTION_RANK: u64;
+    type Opposite: Side;
 }
 impl<S: Side> PawnDirection for S {
     const SHIFT: u8 = 8;
@@ -96,9 +97,11 @@ impl Side for White {
     const COLOR: Color = Color::White;
     const STARTING_RANK: u64 = 0xFF << 8;
     const PROMOTION_RANK: u64 = 0xFF << (7 * 8);
+    type Opposite = Black;
 }
 impl Side for Black {
     const COLOR: Color = Color::Black;
     const STARTING_RANK: u64 = 0xFF << (6 * 8);
     const PROMOTION_RANK: u64 = 0xFF;
+    type Opposite = White;
 }

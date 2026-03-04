@@ -1,8 +1,8 @@
-use std::arch::x86_64::_pext_u64;
+use std::{arch::x86_64::_pext_u64, fmt::Display};
 
 use crate::{
     bitboard::{self, BitBoard, Square},
-    board::{Board, Color, Piece, PieceType},
+    board::{Board, CastlingRights, Color, Piece, PieceType},
     moves::sliders::{
         BISHOP_MASK_TABLE, ROOK_MASK_TABLE, generate_bishop_attacks, generate_bishop_mask,
         generate_rook_attacks, generate_rook_mask,
@@ -14,6 +14,12 @@ use super::{
     traits::{Castle, PawnDirection, Side},
 };
 
+#[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Copy, Clone)]
+pub struct Undo {
+    pub captured_piece: Option<PieceType>,
+    pub previous_ep_square: Option<Square>,
+    pub castling_rights: CastlingRights,
+}
 #[repr(transparent)]
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Copy, Clone)]
 pub struct Move(u16);
@@ -25,12 +31,49 @@ impl Move {
         r#move |= (move_type as u16) << 12;
         Self(r#move)
     }
+
+    pub fn from(&self) -> Square {
+        Square::from_u8_unchecked((self.0 & 0x3F) as u8)
+    }
+    pub fn to(&self) -> Square {
+        Square::from_u8_unchecked(((self.0 >> 6) & 0x3F) as u8)
+    }
+    pub fn move_type(&self) -> MoveType {
+        MoveType::from_u8_unchecked(((self.0 >> 12) & 0xF) as u8)
+    }
+    pub fn promotion_to(&self) -> Option<PieceType> {
+        match self.move_type() {
+            MoveType::BishopCapturePromotion | MoveType::BishopPromotion => Some(PieceType::Bishop),
+            MoveType::KnightCapturePromotion | MoveType::KnightPromotion => Some(PieceType::Knight),
+            MoveType::RookCapturePromotion | MoveType::RookPromotion => Some(PieceType::Rook),
+            MoveType::QueenCapturePromotion | MoveType::QueenPromotion => Some(PieceType::Queen),
+            _ => None,
+        }
+    }
+}
+pub enum Promotion {
+    ToBishop,
+    ToKnight,
+    ToRook,
+    ToQueen,
+}
+impl Display for Move {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} to {}, {:?}",
+            self.from(),
+            self.to(),
+            self.move_type()
+        )
+    }
 }
 #[repr(u8)]
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Copy, Clone)]
 pub enum MoveType {
     Quiet,
     Capture,
+    DoublePush,
     KingSideCastle,
     QueenSideCastle,
     EnPassant,
@@ -41,11 +84,40 @@ pub enum MoveType {
     BishopCapturePromotion,
     KnightCapturePromotion,
     RookCapturePromotion,
-    QueenCaptureCapturePromotion,
+    QueenCapturePromotion,
 }
+impl MoveType {
+    const VARIANTS: u8 = 13;
+    pub fn is_capture(&self) -> bool {
+        match self {
+            MoveType::Capture => true,
+            MoveType::QueenCapturePromotion => true,
+            MoveType::RookCapturePromotion => true,
+            MoveType::BishopCapturePromotion => true,
+            MoveType::KnightCapturePromotion => true,
+            MoveType::EnPassant => true,
+            _ => false,
+        }
+    }
+    pub const fn from_u8_unchecked(v: u8) -> Self {
+        if v >= Self::VARIANTS {
+            panic!("Value doesn't match an Move Type");
+        }
+        unsafe { std::mem::transmute(v) }
+    }
+}
+#[derive(Debug)]
 pub struct MoveList {
     moves: [Move; 256],
     count: usize,
+}
+impl Default for MoveList {
+    fn default() -> Self {
+        MoveList {
+            moves: [Move(0); 256],
+            count: 0,
+        }
+    }
 }
 impl MoveList {
     pub fn push(&mut self, mv: Move) {
@@ -56,13 +128,20 @@ impl MoveList {
             self.count += 1;
         }
     }
+    pub fn as_slice(&self) -> &[Move] {
+        &self.moves[0..self.count]
+    }
 }
 pub struct MoveGenerator {
     rook_atk: Vec<BitBoard>,
     bishop_atk: Vec<BitBoard>,
 }
 impl MoveGenerator {
-    fn fill_captures<S: Side + PawnDirection>(&self, move_list: &mut MoveList, board: &Board) {
+    pub fn generate_captures<S: Side + PawnDirection>(
+        &self,
+        move_list: &mut MoveList,
+        board: &Board,
+    ) {
         let color = S::COLOR;
         let pieces = [
             Piece {
@@ -92,15 +171,13 @@ impl MoveGenerator {
                 piece,
                 board,
                 move_list,
-                board.occupied_by_color(color),
+                board.occupied_by_color(S::Opposite::COLOR),
                 MoveType::Capture,
             );
         }
-        self.generate_capture_pawn_moves::<S>(color, board, move_list);
-        // TODO:  rate them and return if beta cutoff found
-        // if not get quiets
+        self.generate_capture_pawn_moves::<S>(board, move_list);
     }
-    fn fill_quiets<S: Side + PawnDirection + Castle>(
+    pub fn generate_quiets<S: Side + PawnDirection + Castle>(
         &self,
         move_list: &mut MoveList,
         board: &Board,
@@ -133,12 +210,12 @@ impl MoveGenerator {
                 piece,
                 board,
                 move_list,
-                board.occupied_by_color(color),
+                BitBoard(!board.occupied_by_color(color).0),
                 MoveType::Quiet,
             );
         }
-        self.generate_castle_moves::<S>(color, board, move_list); // TODO: Refactor to use color from the S trait
-        self.generate_quiet_pawn_moves::<S>(color, board, move_list);
+        self.generate_castle_moves::<S>(board, move_list); // TODO: Refactor to use color from the S trait
+        self.generate_quiet_pawn_moves::<S>(board, move_list);
     }
     fn init_rook_atk_table() -> Vec<BitBoard> {
         let mut table = vec![BitBoard(0); 4096 * 64];
@@ -196,7 +273,6 @@ impl MoveGenerator {
         let mask = BISHOP_MASK_TABLE[square as usize];
 
         let index = unsafe { _pext_u64(occupancy.0, mask.0) };
-        dbg!(index);
         let offset_index = (square as u64 * 512 + index as u64) as usize;
 
         self.bishop_atk[offset_index]
@@ -210,7 +286,7 @@ impl MoveGenerator {
         move_type: MoveType,
     ) {
         let friends = board.occupied_by_color(piece.color);
-        let squares = board.get_pieces(PieceType::Bishop, piece.color);
+        let squares = board.get_pieces(piece.piece_type, piece.color);
         for square in squares {
             let attacks = match piece.piece_type {
                 PieceType::Bishop => self.get_bishop_atk(square, board.all_occupied()),
@@ -227,27 +303,23 @@ impl MoveGenerator {
             self.fill_moves(square, filtered_attacks, move_list, target, move_type);
         }
     }
-    pub fn generate_castle_moves<C: Castle>(
-        &self,
-        color: Color,
-        board: &Board,
-        move_list: &mut MoveList,
-    ) {
-        if !board.get_castling_rights(color) {
+    pub fn generate_castle_moves<S: Side + Castle>(&self, board: &Board, move_list: &mut MoveList) {
+        let color = S::COLOR;
+        if !board.castling_rights().for_color(color) {
             return;
         };
         let occupied = board.all_occupied();
-        if occupied.0 & !C::KING_SIDE.0 == 0 {
+        if occupied.0 & !S::KING_SIDE.0 == 0 {
             move_list.push(Move::new(
-                C::KING_START_POS,
-                C::KING_SIDE_KING_POS,
+                S::KING_START_POS,
+                S::KING_SIDE_KING_POS,
                 MoveType::KingSideCastle,
             ));
         }
-        if occupied.0 & !C::QUEEN_SIDE.0 == 0 {
+        if occupied.0 & !S::QUEEN_SIDE.0 == 0 {
             move_list.push(Move::new(
-                C::KING_START_POS,
-                C::QUEEN_SIDE_KING_POS,
+                S::KING_START_POS,
+                S::QUEEN_SIDE_KING_POS,
                 MoveType::QueenSideCastle,
             ));
         }
@@ -267,43 +339,39 @@ impl MoveGenerator {
         }
     }
 
-    fn generate_quiet_pawn_moves<Dir: PawnDirection>(
-        &self,
-        color: Color,
-        board: &Board,
-        move_list: &mut MoveList,
-    ) {
+    fn generate_quiet_pawn_moves<S: Side>(&self, board: &Board, move_list: &mut MoveList) {
         // normal move forward
+        let color = S::COLOR;
         let pawns = board.get_pieces(PieceType::Pawn, color);
         let empty = !board.all_occupied().0;
-        let single_push = BitBoard((Dir::shift(pawns)).0 & empty);
+        let single_push = BitBoard((S::shift(pawns)).0 & empty);
         let double_push = BitBoard(
-            Dir::shift(BitBoard(
-                Dir::shift(BitBoard(pawns.0 & Dir::STARTING_RANK as u64)).0 & empty,
+            S::shift(BitBoard(
+                S::shift(BitBoard(pawns.0 & S::STARTING_RANK as u64)).0 & empty,
             ))
             .0 & empty,
         );
-        let promotion = BitBoard((single_push.0 & Dir::PROMOTION_RANK as u64) & empty);
-        let not_promotion = BitBoard((single_push.0 & !Dir::PROMOTION_RANK as u64) & empty);
+        let promotion = BitBoard((single_push.0 & S::PROMOTION_RANK as u64) & empty);
+        let not_promotion = BitBoard((single_push.0 & !S::PROMOTION_RANK as u64) & empty);
         // promotions
         for square in promotion {
             move_list.push(Move::new(
-                Dir::get_source_double(square),
+                S::get_source_double(square),
                 square,
                 MoveType::QueenPromotion,
             ));
             move_list.push(Move::new(
-                Dir::get_source_double(square),
+                S::get_source_double(square),
                 square,
                 MoveType::RookPromotion,
             ));
             move_list.push(Move::new(
-                Dir::get_source_double(square),
+                S::get_source_double(square),
                 square,
                 MoveType::KnightPromotion,
             ));
             move_list.push(Move::new(
-                Dir::get_source_double(square),
+                S::get_source_double(square),
                 square,
                 MoveType::QueenPromotion,
             ));
@@ -311,26 +379,22 @@ impl MoveGenerator {
         // double push
         for square in double_push {
             move_list.push(Move::new(
-                Dir::get_source_double(square),
+                S::get_source_double(square),
                 square,
-                MoveType::Quiet,
+                MoveType::DoublePush,
             ));
         }
         // single push
         for square in not_promotion {
             move_list.push(Move::new(
-                Dir::get_source_single(square),
+                S::get_source_single(square),
                 square,
                 MoveType::Quiet,
             ));
         }
     }
-    fn generate_capture_pawn_moves<Dir: PawnDirection>(
-        &self,
-        color: Color,
-        board: &Board,
-        move_list: &mut MoveList,
-    ) {
+    fn generate_capture_pawn_moves<S: Side>(&self, board: &Board, move_list: &mut MoveList) {
+        let color = S::COLOR;
         let pawns = board.get_pieces(PieceType::Pawn, color);
         let (attack_table, enemies) = match color {
             Color::White => (W_PAWN_ATK_TABLE, board.black_occupied()),
@@ -338,8 +402,8 @@ impl MoveGenerator {
         };
         for pawn_square in pawns {
             let attacks = BitBoard(attack_table[pawn_square as usize].0 & enemies.0);
-            let promotions = BitBoard(attacks.0 & Dir::PROMOTION_RANK as u64);
-            let not_promotions = BitBoard(attacks.0 & !Dir::PROMOTION_RANK as u64);
+            let promotions = BitBoard(attacks.0 & S::PROMOTION_RANK as u64);
+            let not_promotions = BitBoard(attacks.0 & !S::PROMOTION_RANK as u64);
             if let Some(en_passant_square) = board.en_passant_square() {
                 if (1u64 << (en_passant_square as u64)) != 0 {
                     move_list.push(Move::new(
@@ -353,7 +417,7 @@ impl MoveGenerator {
                 move_list.push(Move::new(
                     pawn_square,
                     attack,
-                    MoveType::QueenCaptureCapturePromotion,
+                    MoveType::QueenCapturePromotion,
                 ));
                 move_list.push(Move::new(
                     pawn_square,
@@ -388,7 +452,7 @@ impl Default for MoveGenerator {
         }
     }
 }
-pub struct Occupancy {} // method aggregate for dealing with occupancy
+pub struct Occupancy; // method aggregate for dealing with occupancy
 impl Occupancy {
     pub const fn get_nth_occupancy_for_mask(
         mut mask: BitBoard,
@@ -425,9 +489,15 @@ impl Occupancy {
 }
 
 mod tests {
-    use crate::moves::sliders::{BISHOP_MASK_TABLE, ROOK_MASK_TABLE};
+    use crate::{
+        board::Board,
+        moves::{
+            sliders::{BISHOP_MASK_TABLE, ROOK_MASK_TABLE},
+            traits::White,
+        },
+    };
 
-    use super::{Move, MoveGenerator, MoveType, Occupancy, Square};
+    use super::{Move, MoveGenerator, MoveList, MoveType, Occupancy, Square};
     #[test]
     fn test_rook_moves_generation() {
         let square = Square::A1;
@@ -458,5 +528,17 @@ mod tests {
         let expected_move = Move(0b0001000010000001); // 0001 - capture, 000010 - 3rd square (c1), 000001 - 2nd square (b1)
         println!("{:0>16b}", test_move.0);
         assert!(test_move == expected_move)
+    }
+    #[test]
+    fn test_move_generation() {
+        let board = Board::default();
+        let move_generator = MoveGenerator::default();
+        let mut move_list = MoveList::default();
+        move_generator.generate_quiets::<White>(&mut move_list, &board);
+        let moves = move_list.as_slice();
+        for mv in moves {
+            println!("{mv}");
+        }
+        assert!(false)
     }
 }

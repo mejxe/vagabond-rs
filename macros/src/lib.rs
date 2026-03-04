@@ -20,14 +20,17 @@ impl Parse for BoardMacroInput {
 pub fn create_board_enum(items: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(items as BoardMacroInput);
     let mut variants = Vec::new();
+    let mut variant_strings = Vec::new();
     let mut letters = ('A'..='H').cycle();
     let is_reversed: bool = input.reversed.value();
     let name = input.name;
     for row in 0..8u8 {
         for _ in 0..8u8 {
             let letter = letters.next().expect("it works");
+            let var_string = format!("{}{}", letter, (row + 1));
             let var_name = format_ident!("{}{}", letter, (row + 1));
             variants.push(var_name);
+            variant_strings.push(var_string);
         }
     }
     if is_reversed {
@@ -54,6 +57,13 @@ pub fn create_board_enum(items: TokenStream) -> TokenStream {
             pub const fn from_u8_unchecked(v: u8) -> Self {
                 if v >= 64 { panic!("Square index out of bounds"); }
                 unsafe { std::mem::transmute(v) }
+            }
+        }
+        impl std::fmt::Display for #name {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                const STRINGS: [&str; 64] = [ #(#variant_strings),* ];
+                let index = *self as usize;
+                write!(f, "{}", STRINGS.get(index).unwrap())
             }
         }
         impl TryFrom<u8> for #name {
