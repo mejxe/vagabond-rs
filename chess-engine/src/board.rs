@@ -22,12 +22,18 @@ const BLACK_STARTING_BOARD_BY_PIECE: [BitBoard; 6] = [
 ];
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
-pub struct CastlingRights(u8);
+pub struct CastlingRights(pub u8);
 impl CastlingRights {
     pub fn new(K: bool, Q: bool, k: bool, q: bool) -> Self {
         let mut rights = 0u8;
         rights |= ((K as u8) << 3) | ((Q as u8) << 2) | ((k as u8) << 1) | (q as u8);
         CastlingRights(rights)
+    }
+    pub fn from_mask(mask: u8) -> Self {
+        if mask > 0b1111 {
+            panic!("Incorrect mask format.");
+        }
+        CastlingRights(mask)
     }
     pub fn K(&self) -> bool {
         (self.0 >> 3 & 1) != 0
@@ -232,6 +238,10 @@ impl Board {
     pub fn castling_rights(&self) -> CastlingRights {
         self.castling_rights
     }
+    #[inline(always)]
+    pub fn set_castling_rights(&mut self, cr: CastlingRights) {
+        self.castling_rights = cr;
+    }
 
     #[inline(always)]
     pub fn en_passant_square(&self) -> Option<Square> {
@@ -383,33 +393,54 @@ impl Display for Color {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use crate::{
         bitboard::{BitBoard, Square},
-        board::Color,
+        board::{Color, PieceType},
         moves::traits::White,
     };
 
     use super::Board;
+    #[test]
+    fn test_starting_position_parsing() {
+        // Arrange
+        let board =
+            Board::from_FEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".to_string());
+
+        // Act & Assert
+        let white_pawns = board.get_pieces(PieceType::Pawn, Color::White);
+        let black_kings = board.get_pieces(PieceType::King, Color::Black);
+
+        // White pawns should be on the 2nd rank (bits 8-15)
+        assert_eq!(white_pawns.0, 0x000000000000FF00);
+
+        // Black king should be on e8 (bit 60)
+        assert_eq!(black_kings.0, 1 << 60);
+
+        // Verify castling rights are fully intact
+        let rights = board.castling_rights();
+        assert!(rights.K() && rights.Q() && rights.k() && rights.q());
+    }
+}
+#[cfg(test)]
+mod debug_tests {
+    use super::Board;
+    use crate::{
+        bitboard::{BitBoard, Square},
+        board::{Color, PieceType},
+        moves::traits::White,
+    };
 
     #[test]
+    #[ignore]
     fn fill_board() {
         let board = Board::default();
         println!("{}", board);
         assert!(false);
     }
     #[test]
-    fn starting_from_FEN() {
-        let starting =
-            Board::from_FEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".to_string());
-        println!("{}", starting.all_occupied());
-        println!(
-            "{}",
-            starting.get_pieces(crate::board::PieceType::Bishop, Color::White)
-        );
-        assert!(false)
-    }
-    #[test]
+    #[ignore]
     fn ep_from_FEN() {
         let ep = Board::from_FEN(
             "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq e3 0 3".to_string(),
@@ -423,6 +454,7 @@ mod tests {
         assert!(false)
     }
     #[test]
+    #[ignore]
     fn kiwipete_from_FEN() {
         let b = Board::from_FEN(
             "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1".to_string(),

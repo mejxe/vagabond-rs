@@ -11,6 +11,16 @@ pub const ROOK_MASK_TABLE: [BitBoard; 64] = Occupancy::generate_slider_mask_tbl(
 pub const BISHOP_MASK_TABLE: [BitBoard; 64] =
     Occupancy::generate_slider_mask_tbl(PieceType::Bishop);
 
+pub const CASTLING_MASK: [u8; 64] = {
+    let mut mask = [0xf; 64];
+    mask[Square::A1 as usize] = 0b1011;
+    mask[Square::H1 as usize] = 0b0111;
+    mask[Square::A8 as usize] = 0b1110;
+    mask[Square::H8 as usize] = 0b1101;
+    mask[Square::E1 as usize] = 0b0011;
+    mask[Square::E8 as usize] = 0b1100;
+    mask
+};
 pub const fn generate_rook_mask(square: Square) -> BitBoard {
     let mut attacks = BitBoard(0);
     let mut piece_pos = BitBoard(0);
@@ -199,7 +209,7 @@ const fn generate_pext(val: BitBoard, mut mask: BitBoard) -> u64 {
     ret
 }
 
-pub mod tests {
+pub mod debug_tests {
     use std::arch::x86_64::_pext_u64;
 
     use crate::bitboard::BitBoard;
@@ -215,6 +225,7 @@ pub mod tests {
     use super::generate_rook_attacks;
 
     #[test]
+    #[ignore]
     fn test_rook_attack() {
         let rook_atk = generate_rook_attacks(Square::A1, BitBoard(0));
         println!("{}", rook_atk);
@@ -224,19 +235,6 @@ pub mod tests {
         println!("{}", bishop_mask);
         let bishop_atk = generate_bishop_attacks(Square::E5, BitBoard(0));
         println!("{}", bishop_atk);
-        assert!(false);
-    }
-    #[test]
-    fn test_software_pext_generation() {
-        let mask = ROOK_MASK_TABLE[Square::A1 as usize];
-        let bits_in_mask = mask.0.count_ones() as u8;
-        let mut variant = 0u32;
-        while variant < (1 << bits_in_mask) {
-            let occupancy = Occupancy::get_nth_occupancy_for_mask(mask, variant, bits_in_mask);
-            variant += 1;
-            let index = generate_pext(occupancy, mask);
-            println!("{:0b}", index)
-        }
         assert!(false);
     }
 }

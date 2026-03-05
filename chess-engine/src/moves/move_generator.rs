@@ -214,7 +214,7 @@ impl MoveGenerator {
                 MoveType::Quiet,
             );
         }
-        self.generate_castle_moves::<S>(board, move_list); // TODO: Refactor to use color from the S trait
+        self.generate_castle_moves::<S>(board, move_list);
         self.generate_quiet_pawn_moves::<S>(board, move_list);
     }
     fn init_rook_atk_table() -> Vec<BitBoard> {
@@ -309,14 +309,14 @@ impl MoveGenerator {
             return;
         };
         let occupied = board.all_occupied();
-        if occupied.0 & !S::KING_SIDE.0 == 0 {
+        if occupied.0 & S::KING_SIDE.0 == 0 {
             move_list.push(Move::new(
                 S::KING_START_POS,
                 S::KING_SIDE_KING_POS,
                 MoveType::KingSideCastle,
             ));
         }
-        if occupied.0 & !S::QUEEN_SIDE.0 == 0 {
+        if occupied.0 & S::QUEEN_SIDE.0 == 0 {
             move_list.push(Move::new(
                 S::KING_START_POS,
                 S::QUEEN_SIDE_KING_POS,
@@ -487,8 +487,45 @@ impl Occupancy {
         attack_table
     }
 }
-
+#[cfg(test)]
 mod tests {
+    use crate::{
+        bitboard::Square,
+        board::Board,
+        moves::{
+            move_generator::{Move, MoveGenerator, MoveList, MoveType},
+            sliders::{BISHOP_MASK_TABLE, ROOK_MASK_TABLE},
+            traits::White,
+        },
+    };
+    #[test]
+    fn test_move_constructor() {
+        let test_move = Move::new(Square::B1, Square::C1, MoveType::Capture);
+        let expected_move = Move(0b0001000010000001); // 0001 - capture, 000010 - 3rd square (c1), 000001 - 2nd square (b1)
+        println!("{:0>16b}", test_move.0);
+        assert!(test_move == expected_move)
+    }
+    #[test]
+    fn test_starting_position_move_count() {
+        // Setup
+        let board = Board::default();
+        let move_generator = MoveGenerator::default();
+        let mut move_list = MoveList::default();
+
+        // Act
+        move_generator.generate_quiets::<White>(&mut move_list, &board);
+        move_generator.generate_captures::<White>(&mut move_list, &board);
+
+        // Assert
+        assert_eq!(
+            move_list.as_slice().len(),
+            20,
+            "Starting position should have exactly 20 moves"
+        );
+    }
+}
+#[cfg(test)]
+mod debug_tests {
     use crate::{
         board::Board,
         moves::{
@@ -499,6 +536,7 @@ mod tests {
 
     use super::{Move, MoveGenerator, MoveList, MoveType, Occupancy, Square};
     #[test]
+    #[ignore]
     fn test_rook_moves_generation() {
         let square = Square::A1;
         let move_gen = MoveGenerator::default();
@@ -511,6 +549,7 @@ mod tests {
         assert!(false)
     }
     #[test]
+    #[ignore]
     fn test_bishop_moves_generation() {
         let square = Square::D5;
         let move_gen = MoveGenerator::default();
@@ -523,13 +562,7 @@ mod tests {
         assert!(false)
     }
     #[test]
-    fn test_move_constructor() {
-        let test_move = Move::new(Square::B1, Square::C1, MoveType::Capture);
-        let expected_move = Move(0b0001000010000001); // 0001 - capture, 000010 - 3rd square (c1), 000001 - 2nd square (b1)
-        println!("{:0>16b}", test_move.0);
-        assert!(test_move == expected_move)
-    }
-    #[test]
+    #[ignore]
     fn test_move_generation() {
         let board = Board::default();
         let move_generator = MoveGenerator::default();
@@ -540,5 +573,20 @@ mod tests {
             println!("{mv}");
         }
         assert!(false)
+    }
+    #[test]
+    #[ignore]
+    fn test_castling_generation() {
+        let board =
+            Board::from_FEN("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1".to_string());
+        println!("{}", board);
+        let move_generator = MoveGenerator::default();
+        let mut move_list = MoveList::default();
+        move_generator.generate_quiets::<White>(&mut move_list, &board);
+        let moves = move_list.as_slice();
+        for (i, mv) in moves.iter().enumerate() {
+            println!("{i}: {mv}");
+        }
+        assert!(false);
     }
 }
