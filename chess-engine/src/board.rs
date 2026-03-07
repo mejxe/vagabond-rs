@@ -1,6 +1,9 @@
 use std::{fmt::Display, iter::MapWhile};
 
-use crate::bitboard::{BitBoard, Square};
+use crate::{
+    bitboard::{BitBoard, Square},
+    evaluation::{Evaluation, PestoEvaluation},
+};
 const ALL_STARTING_BOARD: BitBoard = BitBoard(18446462598732906495);
 const WHITE_STARTING_BOARD: BitBoard = BitBoard(65535);
 const BLACK_STARTING_BOARD: BitBoard = BitBoard(18446462598732840960);
@@ -116,6 +119,11 @@ pub struct Board {
 
     castling_rights: CastlingRights,
     en_passant_square: Option<Square>,
+
+    // pesto eval
+    pub mg_score: i16,
+    pub eg_score: i16,
+    pub phase: i16,
 }
 impl Default for Board {
     fn default() -> Self {
@@ -129,6 +137,9 @@ impl Default for Board {
             occupied_by_color,
             castling_rights,
             en_passant_square: None,
+            mg_score: 0,
+            eg_score: 0,
+            phase: 24,
         }
     }
 }
@@ -283,12 +294,16 @@ impl Board {
                 occupied_by_color[piece.color as usize].0 ^= 1u64 << i;
             }
         }
+        let (mg_score, eg_score, phase) = Board::evaluate_whole_board(mailbox, curr_move);
         Board {
             mailbox,
             occupied_by_color,
             pieces,
             castling_rights,
             en_passant_square,
+            mg_score,
+            eg_score,
+            phase,
         }
     }
     pub fn from_FEN(fen_string: String) -> Board {
@@ -336,6 +351,36 @@ impl Board {
         let castling_rights = CastlingRights::new(cr[0], cr[1], cr[2], cr[3]);
         let en_passant_square = chess_notation_to_sq(ep_square);
         Board::from_mailbox(mailbox, to_move, castling_rights, en_passant_square)
+    }
+    fn evaluate_whole_board(mailbox: [Option<Piece>; 64], current_move: Color) -> (i16, i16, i16) {
+        let mut mg_scores = [0; 2]; // per color
+        let mut eg_scores = [0; 2];
+        let mut game_phase = 0;
+        for (i, possible_piece) in mailbox.into_iter().enumerate() {
+            if let Some(piece) = possible_piece {
+                mg_scores[piece.color as usize] +=
+                    PestoEvaluation::get_mg_score(Square::from_u8_unchecked(i as u8), piece);
+                eg_scores[piece.color as usize] +=
+                    PestoEvaluation::get_eg_score(Square::from_u8_unchecked(i as u8), piece);
+                game_phase += PestoEvaluation::PIECE_PHASE_INCR[piece.piece_type as usize];
+            }
+        }
+        (
+            mg_scores[current_move as usize] - mg_scores[current_move as usize ^ 1],
+            eg_scores[current_move as usize] - eg_scores[current_move as usize ^ 1],
+            game_phase,
+        )
+    }
+    pub fn evaluate(&self) -> i16 {
+        (self.mg_score / 24 * self.phase + self.eg_score / 24 * (24 - self.phase))
+    }
+    pub fn add_score<S: Evaluation>(&mut self, square: Square, piece: Piece) {
+        self.mg_score += PestoEvaluation::get_mg_score(square, piece) * S::MULTIPLIER;
+        self.eg_score += PestoEvaluation::get_eg_score(square, piece) * S::MULTIPLIER;
+    }
+    pub fn subtract_score<S: Evaluation>(&mut self, square: Square, piece: Piece) {
+        self.mg_score -= PestoEvaluation::get_mg_score(square, piece) * S::MULTIPLIER;
+        self.eg_score -= PestoEvaluation::get_eg_score(square, piece) * S::MULTIPLIER;
     }
 }
 fn c_to_piece(c: char) -> Option<Piece> {
@@ -421,6 +466,18 @@ mod tests {
         // Verify castling rights are fully intact
         let rights = board.castling_rights();
         assert!(rights.K() && rights.Q() && rights.k() && rights.q());
+    }
+    #[test]
+    fn test_evaluation() {
+        // Arrange
+        let board =
+            Board::from_FEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".to_string());
+
+        // Act & Assert
+        assert_eq!(board.evaluate(), 0);
+        let board =
+            Board::from_FEN("rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".to_string());
+        assert_eq!(board.evaluate(), 992);
     }
 }
 #[cfg(test)]

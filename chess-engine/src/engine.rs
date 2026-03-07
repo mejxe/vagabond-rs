@@ -2,6 +2,7 @@ use crate::{
     ai::ai::AI,
     bitboard::Square,
     board::{Board, CastlingRights, Color, Piece, PieceType},
+    evaluation::{Evaluation, PestoEvaluation},
     moves::{
         move_generator::{Move, MoveGenerator, MoveType, Promotion, Undo},
         sliders::CASTLING_MASK,
@@ -24,7 +25,10 @@ impl Default for Engine {
     }
 }
 
-pub fn make_move<S: Side + PawnDirection + Castle>(board: &mut Board, mv: Move) -> Undo {
+pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
+    board: &mut Board,
+    mv: Move,
+) -> Undo {
     let from = mv.from();
     let to = mv.to();
     let move_type = mv.move_type();
@@ -44,14 +48,15 @@ pub fn make_move<S: Side + PawnDirection + Castle>(board: &mut Board, mv: Move) 
             to
         };
         let opposite_color = S::Opposite::COLOR;
-        let captured = board
-            .get_piece_at_square(piece_pos)
-            .expect("has to exist")
-            .piece_type;
-        undo_move.captured_piece = Some(captured);
+        let captured = board.get_piece_at_square(piece_pos).expect("has to exist");
+        undo_move.captured_piece = Some(captured.piece_type);
+        // update evaluation
+        board.phase -= PestoEvaluation::PIECE_PHASE_INCR[captured.piece_type as usize]; // - phase of captured
+        board.add_score::<S>(piece_pos, captured); // + value of captured
+
         let cap_mask = 1u64 << (piece_pos as u8);
         board.occupied_by_color[opposite_color as usize].0 ^= cap_mask;
-        board.pieces[opposite_color as usize][captured as usize].0 ^= cap_mask;
+        board.pieces[opposite_color as usize][captured.piece_type as usize].0 ^= cap_mask;
     }
 
     // set ep square for dpush
@@ -66,40 +71,37 @@ pub fn make_move<S: Side + PawnDirection + Castle>(board: &mut Board, mv: Move) 
         board.pieces[color as usize][promotion as usize].0 ^= 1u64 << to as u8;
         board.pieces[color as usize][PieceType::Pawn as usize].0 ^= 1u64 << from as u8;
         board.occupied_by_color[color as usize].0 ^= move_mask;
+        let new_piece = Piece {
+            piece_type: promotion,
+            color,
+        };
         board.set_piece_at_square(from, None);
-        board.set_piece_at_square(
-            to,
-            Some(Piece {
-                piece_type: promotion,
-                color,
-            }),
-        );
+        board.set_piece_at_square(to, Some(new_piece));
+        // update evaluation
+        board.phase += PestoEvaluation::PIECE_PHASE_INCR[promotion as usize]; // + phase of promoted
+        board.add_score::<S>(to, new_piece); //+ val of promoted
     } else {
+        let rook = Piece {
+            piece_type: PieceType::Rook,
+            color,
+        };
         match move_type {
             MoveType::QueenSideCastle => {
                 board.pieces[color as usize][PieceType::Rook as usize].0 ^= (1u64
                     << S::QUEEN_SIDE_ROOK_POS as u8)
                     & (1u64 << S::QUEEN_ROOK_START_POS as u8);
                 board.set_piece_at_square(S::QUEEN_ROOK_START_POS, None);
-                board.set_piece_at_square(
-                    S::QUEEN_SIDE_ROOK_POS,
-                    Some(Piece {
-                        piece_type: PieceType::Rook,
-                        color,
-                    }),
-                );
+                board.set_piece_at_square(S::QUEEN_SIDE_ROOK_POS, Some(rook));
+                board.add_score::<S>(S::QUEEN_SIDE_ROOK_POS, rook); // + val of rook new square
+                board.subtract_score::<S>(S::QUEEN_ROOK_START_POS, rook); // - val of starting rook square
             }
             MoveType::KingSideCastle => {
                 board.pieces[color as usize][PieceType::Rook as usize].0 ^=
                     (1u64 << S::KING_SIDE_ROOK_POS as u8) & (1u64 << S::KING_ROOK_START_POS as u8);
                 board.set_piece_at_square(S::KING_ROOK_START_POS, None);
-                board.set_piece_at_square(
-                    S::KING_SIDE_ROOK_POS,
-                    Some(Piece {
-                        piece_type: PieceType::Rook,
-                        color,
-                    }),
-                );
+                board.set_piece_at_square(S::KING_SIDE_ROOK_POS, Some(rook));
+                board.add_score::<S>(S::KING_SIDE_ROOK_POS, rook); // + val of rook new square
+                board.subtract_score::<S>(S::KING_ROOK_START_POS, rook); // - val of starting rook square
             }
             _ => {}
         };
@@ -107,6 +109,9 @@ pub fn make_move<S: Side + PawnDirection + Castle>(board: &mut Board, mv: Move) 
         board.occupied_by_color[color as usize].0 ^= move_mask;
         board.set_piece_at_square(from, None);
         board.set_piece_at_square(to, Some(mover));
+
+        board.subtract_score::<S>(from, mover); // - val of old square
+        board.add_score::<S>(to, mover); // + val of new square
     }
     // update castle rights
     board.set_castling_rights(CastlingRights(
@@ -114,12 +119,85 @@ pub fn make_move<S: Side + PawnDirection + Castle>(board: &mut Board, mv: Move) 
     ));
     undo_move
 }
-pub fn undo_move(mv: Move, board: &Board, undo: Undo) {}
+pub fn undo_move<S: Side + Castle + Evaluation>(mv: Move, board: &mut Board, undo: Undo) {
+    let color = S::COLOR;
+    let from = mv.from();
+    let to = mv.to();
+    let move_type = mv.move_type();
+    let move_mask = (1u64 << from as u8) | (1u64 << to as u8);
+    let mover = board.get_piece_at_square(to).expect("has to exist");
+    if let Some(promotion) = mv.promotion_to() {
+        board.pieces[color as usize][promotion as usize].0 ^= 1u64 << to as u8;
+        board.pieces[color as usize][PieceType::Pawn as usize].0 ^= 1u64 << from as u8;
+        board.occupied_by_color[color as usize].0 ^= move_mask;
+        let new_piece = Piece {
+            piece_type: PieceType::Pawn,
+            color,
+        };
+        board.phase -= PestoEvaluation::PIECE_PHASE_INCR[promotion as usize]; // - phase of promoted
+        board.add_score::<S>(to, new_piece); //+ val of promoted
+        board.set_piece_at_square(to, None);
+        board.set_piece_at_square(from, Some(new_piece));
+    } else {
+        let rook = Piece {
+            piece_type: PieceType::Rook,
+            color,
+        };
+        match move_type {
+            MoveType::QueenSideCastle => {
+                board.pieces[color as usize][PieceType::Rook as usize].0 ^= (1u64
+                    << S::QUEEN_SIDE_ROOK_POS as u8)
+                    & (1u64 << S::QUEEN_ROOK_START_POS as u8);
+                board.set_piece_at_square(S::QUEEN_ROOK_START_POS, Some(rook));
+                board.set_piece_at_square(S::QUEEN_SIDE_ROOK_POS, None);
+                board.subtract_score::<S>(S::QUEEN_SIDE_ROOK_POS, rook); // + val of rook new square
+                board.add_score::<S>(S::QUEEN_ROOK_START_POS, rook); // - val of starting rook square
+            }
+            MoveType::KingSideCastle => {
+                board.pieces[color as usize][PieceType::Rook as usize].0 ^=
+                    (1u64 << S::KING_SIDE_ROOK_POS as u8) & (1u64 << S::KING_ROOK_START_POS as u8);
+                board.set_piece_at_square(S::KING_ROOK_START_POS, Some(rook));
+                board.set_piece_at_square(S::KING_SIDE_ROOK_POS, None);
+                board.subtract_score::<S>(S::KING_SIDE_ROOK_POS, rook); // + val of rook new square
+                board.add_score::<S>(S::KING_ROOK_START_POS, rook); // - val of starting rook square
+            }
+            _ => {}
+        };
+        board.pieces[color as usize][mover.piece_type as usize].0 ^= move_mask;
+        board.occupied_by_color[color as usize].0 ^= move_mask;
+        board.set_piece_at_square(from, Some(mover));
+        board.set_piece_at_square(to, None);
+        board.add_score::<S>(from, mover);
+        board.subtract_score::<S>(to, mover);
+    }
+    if let Some(captured) = undo.captured_piece {
+        let opposite_color = S::Opposite::COLOR;
+        let captured = Piece {
+            piece_type: captured,
+            color: opposite_color,
+        };
+        let piece_pos = if let MoveType::EnPassant = move_type {
+            S::get_source_single(to)
+        } else {
+            to
+        };
+        let cap_mask = 1u64 << (piece_pos as u8);
+        board.occupied_by_color[opposite_color as usize].0 ^= cap_mask;
+        board.pieces[opposite_color as usize][captured.piece_type as usize].0 ^= cap_mask;
+        board.phase += PestoEvaluation::PIECE_PHASE_INCR[captured.piece_type as usize]; // - phase of captured
+        board.subtract_score::<S>(piece_pos, captured);
+        board.set_piece_at_square(piece_pos, Some(captured));
+    }
+
+    board.set_castling_rights(undo.castling_rights);
+    board.set_en_passant_square(undo.previous_ep_square);
+}
 
 mod tests {
     use crate::{
         bitboard::Square,
         board::{Board, Color, PieceType},
+        engine::undo_move,
         moves::{
             move_generator::{Move, MoveGenerator, MoveList, MoveType},
             traits::White,
@@ -160,9 +238,10 @@ mod tests {
         let mut board =
             Board::from_FEN("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1".to_string());
         let mv = Move::new(Square::E1, Square::G1, MoveType::KingSideCastle);
+        let original_board = board.clone();
 
         // Act
-        make_move::<White>(&mut board, mv);
+        let undo = make_move::<White>(&mut board, mv);
 
         // Assert
         // King should be on g1
@@ -176,6 +255,21 @@ mod tests {
         // Original squares e1 and h1 should be empty
         assert!(board.get_piece_at_square(Square::E1).is_none());
         assert!(board.get_piece_at_square(Square::H1).is_none());
+        undo_move::<White>(mv, &mut board, undo);
+        assert_eq!(original_board, board)
+    }
+    #[test]
+    fn test_undo() {
+        let mut board = Board::default();
+        let original_board = board.clone();
+        let mv = Move::new(Square::E2, Square::E4, MoveType::DoublePush);
+
+        // Act
+        let undo = make_move::<White>(&mut board, mv);
+        undo_move::<White>(mv, &mut board, undo);
+
+        // Assert
+        assert_eq!(board, original_board);
     }
 }
 mod debug_tests {
