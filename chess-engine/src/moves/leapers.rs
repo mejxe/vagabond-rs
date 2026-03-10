@@ -167,3 +167,5 @@ pub const W_PAWN_ATK_TABLE: [BitBoard; 64] =
     generate_leaper_table(PieceType::Pawn, Some(Color::White));
 pub const B_PAWN_ATK_TABLE: [BitBoard; 64] =
     generate_leaper_table(PieceType::Pawn, Some(Color::Black));
+
+pub const PAWN_ATK_TABLE: [[BitBoard; 64]; 2] = [W_PAWN_ATK_TABLE, B_PAWN_ATK_TABLE];

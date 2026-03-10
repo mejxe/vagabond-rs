@@ -1,4 +1,7 @@
-use std::fmt::Display;
+use std::{
+    fmt::Display,
+    ops::{BitAnd, BitOr, BitXor},
+};
 
 use macros::create_board_enum;
 
@@ -62,5 +65,30 @@ impl IntoIterator for BitBoard {
     type IntoIter = BitBoardIterator;
     fn into_iter(self) -> Self::IntoIter {
         BitBoardIterator { bits: self.0 }
+    }
+}
+impl std::ops::Index<Square> for [BitBoard; 64] {
+    type Output = BitBoard;
+    #[inline(always)]
+    fn index(&self, index: Square) -> &Self::Output {
+        &self[index as usize]
+    }
+}
+impl BitAnd<BitBoard> for BitBoard {
+    type Output = BitBoard;
+    fn bitand(self, rhs: BitBoard) -> Self::Output {
+        BitBoard(self.0 & rhs.0)
+    }
+}
+impl BitOr<BitBoard> for BitBoard {
+    type Output = BitBoard;
+    fn bitor(self, rhs: BitBoard) -> Self::Output {
+        BitBoard(self.0 | rhs.0)
+    }
+}
+impl BitXor<BitBoard> for BitBoard {
+    type Output = BitBoard;
+    fn bitxor(self, rhs: BitBoard) -> Self::Output {
+        BitBoard(self.0 ^ rhs.0)
     }
 }

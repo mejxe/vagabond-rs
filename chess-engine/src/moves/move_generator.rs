@@ -10,8 +10,10 @@ use crate::{
 };
 
 use super::{
-    leapers::{B_PAWN_ATK_TABLE, KING_ATK_TABLE, KNIGHT_ATK_TABLE, W_PAWN_ATK_TABLE},
-    traits::{Castle, PawnDirection, Side},
+    leapers::{
+        B_PAWN_ATK_TABLE, KING_ATK_TABLE, KNIGHT_ATK_TABLE, PAWN_ATK_TABLE, W_PAWN_ATK_TABLE,
+    },
+    traits::{Black, Castle, PawnDirection, Side, White},
 };
 
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Copy, Clone)]
@@ -100,7 +102,7 @@ impl MoveType {
         }
     }
     pub const fn from_u8_unchecked(v: u8) -> Self {
-        if v >= Self::VARIANTS {
+        if v > Self::VARIANTS {
             panic!("Value doesn't match an Move Type");
         }
         unsafe { std::mem::transmute(v) }
@@ -137,6 +139,20 @@ pub struct MoveGenerator {
     bishop_atk: Vec<BitBoard>,
 }
 impl MoveGenerator {
+    pub fn generate_moves(&self, move_list: &mut MoveList, board: &Board) {
+        match board.side_to_move {
+            Color::Black => self.generate_moves_generic::<Black>(move_list, board),
+            Color::White => self.generate_moves_generic::<White>(move_list, board),
+        }
+    }
+    pub fn generate_moves_generic<S: Side + PawnDirection + Castle>(
+        &self,
+        move_list: &mut MoveList,
+        board: &Board,
+    ) {
+        self.generate_captures::<S>(move_list, board);
+        self.generate_quiets::<S>(move_list, board);
+    }
     pub fn generate_captures<S: Side + PawnDirection>(
         &self,
         move_list: &mut MoveList,
@@ -210,7 +226,7 @@ impl MoveGenerator {
                 piece,
                 board,
                 move_list,
-                BitBoard(!board.occupied_by_color(color).0),
+                BitBoard(!board.all_occupied().0),
                 MoveType::Quiet,
             );
         }
@@ -300,14 +316,18 @@ impl MoveGenerator {
                 ),
             };
             let filtered_attacks = BitBoard(attacks.0 & !friends.0);
-            self.fill_moves(square, filtered_attacks, move_list, target, move_type);
+            self.fill_moves(
+                square,
+                filtered_attacks,
+                move_list,
+                target,
+                move_type,
+                piece.piece_type,
+                piece,
+            );
         }
     }
     pub fn generate_castle_moves<S: Side + Castle>(&self, board: &Board, move_list: &mut MoveList) {
-        let color = S::COLOR;
-        if !board.castling_rights().for_color(color) {
-            return;
-        };
         let occupied = board.all_occupied();
         if occupied.0 & S::KING_SIDE.0 == 0 {
             move_list.push(Move::new(
@@ -332,10 +352,18 @@ impl MoveGenerator {
         move_list: &mut MoveList,
         target: BitBoard,
         move_type: MoveType,
+        piece_type: PieceType,
+        piece: Piece,
     ) {
         let target_squares = BitBoard(attacks.0 & target.0);
         for to_square in target_squares {
             move_list.push(Move::new(from_square, to_square, move_type));
+            if (from_square == Square::G7 && to_square == Square::H8) {
+                dbg!(piece);
+                dbg!(move_type);
+                println!("{attacks}");
+                println!("{target}");
+            }
         }
     }
 
@@ -393,19 +421,20 @@ impl MoveGenerator {
             ));
         }
     }
+    pub fn get_pawn_attack<S: Side>(square: Square) -> BitBoard {
+        PAWN_ATK_TABLE[S::COLOR as usize][square as usize]
+    }
     fn generate_capture_pawn_moves<S: Side>(&self, board: &Board, move_list: &mut MoveList) {
         let color = S::COLOR;
+        let enemies = board.occupied_by_color(S::Opposite::COLOR);
         let pawns = board.get_pieces(PieceType::Pawn, color);
-        let (attack_table, enemies) = match color {
-            Color::White => (W_PAWN_ATK_TABLE, board.black_occupied()),
-            Color::Black => (B_PAWN_ATK_TABLE, board.white_occupied()),
-        };
         for pawn_square in pawns {
-            let attacks = BitBoard(attack_table[pawn_square as usize].0 & enemies.0);
+            let not_filttered_attacks = MoveGenerator::get_pawn_attack::<S>(pawn_square);
+            let attacks = not_filttered_attacks & enemies;
             let promotions = BitBoard(attacks.0 & S::PROMOTION_RANK as u64);
             let not_promotions = BitBoard(attacks.0 & !S::PROMOTION_RANK as u64);
             if let Some(en_passant_square) = board.en_passant_square() {
-                if (1u64 << (en_passant_square as u64)) != 0 {
+                if (BitBoard(1u64 << en_passant_square as u64) & not_filttered_attacks).0 != 0 {
                     move_list.push(Move::new(
                         pawn_square,
                         en_passant_square,
@@ -439,6 +468,53 @@ impl MoveGenerator {
                 move_list.push(Move::new(pawn_square, attack, MoveType::Capture));
             }
         }
+    }
+    pub fn is_king_in_check(&self, board: &Board, color: Color) -> bool {
+        let king = Square::from_u8_unchecked(
+            board.pieces[color][PieceType::King].0.trailing_zeros() as u8,
+        );
+        match color {
+            Color::White => self.is_square_attacked::<White>(board, king),
+            Color::Black => self.is_square_attacked::<Black>(board, king),
+        }
+    }
+    pub fn is_square_attacked<S: Side>(&self, board: &Board, sq: Square) -> bool {
+        let attacker_color = S::Opposite::COLOR;
+        if (MoveGenerator::get_pawn_attack::<S>(sq).0
+            & board.pieces[attacker_color][PieceType::Pawn].0)
+            != 0
+        {
+            return true;
+        }
+
+        if (KNIGHT_ATK_TABLE[sq].0 & board.pieces[attacker_color][PieceType::Knight].0) != 0 {
+            return true;
+        }
+
+        let occupancy = board.all_occupied();
+        if (self.get_bishop_atk(sq, occupancy)
+            & (board.pieces[attacker_color][PieceType::Bishop]
+                | board.pieces[attacker_color][PieceType::Queen]))
+            .0
+            != 0
+        {
+            return true;
+        }
+
+        if (self.get_rook_atk(sq, occupancy)
+            & (board.pieces[attacker_color][PieceType::Rook]
+                | board.pieces[attacker_color][PieceType::Queen]))
+            .0
+            != 0
+        {
+            return true;
+        }
+
+        if (KING_ATK_TABLE[sq] & board.pieces[attacker_color][PieceType::King]).0 != 0 {
+            return true;
+        }
+
+        false
     }
 }
 
@@ -489,15 +565,89 @@ impl Occupancy {
 }
 #[cfg(test)]
 mod tests {
+
     use crate::{
         bitboard::Square,
-        board::Board,
+        board::{Board, Color, PieceType},
+        engine::{make_move, undo_move},
+        evaluation::Evaluation,
         moves::{
             move_generator::{Move, MoveGenerator, MoveList, MoveType},
             sliders::{BISHOP_MASK_TABLE, ROOK_MASK_TABLE},
-            traits::White,
+            traits::{Black, Castle, PawnDirection, Side, White},
         },
+        performance::perft_entry,
     };
+    #[test]
+    fn test_move_generation_perft_starting_board() {
+        let mut board = Board::default();
+        let mut board_2 = Board::from_FEN(
+            "rnbqkbnr/pppppppp/8/8/8/4P3/PPPP1PPP/RNBQKBNR b KQkq - 0 1".to_string(),
+        );
+        println!("{board_2}");
+        //let mv = Move::new(Square::E2, Square::E4, MoveType::Quiet);
+        //make_move::<White>(&mut board, mv);
+        //let mv = Move::new(Square::D7, Square::D5, MoveType::DoublePush);
+        //make_move::<Black>(&mut board, mv);
+        //let mv = Move::new(Square::E1, Square::E2, MoveType::Quiet);
+        //make_move::<White>(&mut board, mv);
+        println!("{board}");
+        //assert_eq!(8902, perft_entry(&mut board, 3));
+        //assert_eq!(197281, perft_entry(&mut board, 4));
+        //assert_eq!(4865609, perft_divide::<White>(&mut board, 5));
+        //assert_eq!(4865609, perft_divide::<White>(&mut board, 5));
+        assert_eq!(119060324, perft_entry(&mut board, 6));
+    }
+    #[test]
+    fn test_is_king_in_check() {
+        let move_generator = MoveGenerator::default();
+        let board = Board::from_FEN("4k3/8/8/8/8/8/8/4K2r w - - 0 1".to_string());
+        let king_sq = Square::from_u8_unchecked(
+            board
+                .get_pieces(PieceType::King, Color::White)
+                .0
+                .trailing_zeros() as u8,
+        );
+        let is_attacked = move_generator.is_square_attacked::<White>(&board, king_sq);
+        println!("{}", board);
+        assert!(is_attacked);
+        let board = Board::from_FEN("8/8/8/8/8/2n5/8/1K6 w - - 0 1".to_string());
+        let king_sq = Square::from_u8_unchecked(
+            board
+                .get_pieces(PieceType::King, Color::White)
+                .0
+                .trailing_zeros() as u8,
+        );
+        let is_attacked = move_generator.is_square_attacked::<White>(&board, king_sq);
+        assert!(is_attacked);
+        let board = Board::from_FEN("8/6b1/8/8/3K4/8/8/8 w - - 0 1".to_string());
+        let king_sq = Square::from_u8_unchecked(
+            board
+                .get_pieces(PieceType::King, Color::White)
+                .0
+                .trailing_zeros() as u8,
+        );
+        let is_attacked = move_generator.is_square_attacked::<White>(&board, king_sq);
+        assert!(is_attacked);
+        let board = Board::from_FEN("8/8/8/q3K3/8/8/8/8 w - - 0 1".to_string());
+        let king_sq = Square::from_u8_unchecked(
+            board
+                .get_pieces(PieceType::King, Color::White)
+                .0
+                .trailing_zeros() as u8,
+        );
+        let is_attacked = move_generator.is_square_attacked::<White>(&board, king_sq);
+        assert!(is_attacked);
+        let board = Board::from_FEN("8/8/8/q1P1K3/8/8/8/8 w - - 0 1".to_string());
+        let king_sq = Square::from_u8_unchecked(
+            board
+                .get_pieces(PieceType::King, Color::White)
+                .0
+                .trailing_zeros() as u8,
+        );
+        let is_attacked = move_generator.is_square_attacked::<White>(&board, king_sq);
+        assert!(!is_attacked);
+    }
     #[test]
     fn test_move_constructor() {
         let test_move = Move::new(Square::B1, Square::C1, MoveType::Capture);
@@ -527,10 +677,13 @@ mod tests {
 #[cfg(test)]
 mod debug_tests {
     use crate::{
-        board::Board,
+        bitboard::BitBoard,
+        board::{Board, Color},
+        engine::{make_move, undo_move},
         moves::{
+            leapers::KNIGHT_ATK_TABLE,
             sliders::{BISHOP_MASK_TABLE, ROOK_MASK_TABLE},
-            traits::White,
+            traits::{Black, White},
         },
     };
 
@@ -563,6 +716,26 @@ mod debug_tests {
     }
     #[test]
     #[ignore]
+    fn test_move_generation_debug() {
+        let mut board = Board::from_FEN(
+            "rbnqkbnr/1ppppppp/8/p7/8/1N6/PPPPPPPP/RB1QKBNR w KQkq - 0 1".to_string(),
+        );
+        println!("{board}");
+        let move_generator = MoveGenerator::default();
+        let mut move_list = MoveList::default();
+        move_generator.generate_moves_generic::<White>(&mut move_list, &board);
+        let moves = move_list.as_slice();
+        let capture = moves[0];
+        for mv in moves {
+            println!("{mv}");
+        }
+        let undo = make_move::<White>(&mut board, capture);
+        undo_move::<White>(capture, &mut board, undo);
+        println!("{board}");
+        assert!(false);
+    }
+    #[test]
+    #[ignore]
     fn test_move_generation() {
         let board = Board::default();
         let move_generator = MoveGenerator::default();
@@ -575,14 +748,30 @@ mod debug_tests {
         assert!(false)
     }
     #[test]
-    #[ignore]
     fn test_castling_generation() {
-        let board =
-            Board::from_FEN("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1".to_string());
+        let board = Board::from_FEN("4k3/8/8/8/8/8/8/4K2R w K - 0 1".to_string());
         println!("{}", board);
         let move_generator = MoveGenerator::default();
         let mut move_list = MoveList::default();
         move_generator.generate_quiets::<White>(&mut move_list, &board);
+        let moves = move_list.as_slice();
+        for (i, mv) in moves.iter().enumerate() {
+            println!("{i}: {mv}");
+        }
+        assert!(false);
+    }
+    #[test]
+    fn debug_test() {
+        let board = Board::from_FEN("8/8/8/3pP3/8/8/8/8 w - d6 0 1".to_string());
+        println!("{}", board);
+        let move_generator = MoveGenerator::default();
+        let mut move_list = MoveList::default();
+        let attacks = BitBoard(MoveGenerator::get_pawn_attack::<White>(Square::E5).0);
+        println!("{attacks}");
+        println!("{}", board.en_passant_square().unwrap());
+        let wtf = BitBoard(1u64 << board.en_passant_square().unwrap() as u8);
+        println!("{wtf}");
+        move_generator.generate_moves_generic::<White>(&mut move_list, &board);
         let moves = move_list.as_slice();
         for (i, mv) in moves.iter().enumerate() {
             println!("{i}: {mv}");

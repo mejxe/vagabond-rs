@@ -1,28 +1,13 @@
-use std::{fmt::Display, iter::MapWhile};
+use std::{
+    fmt::Display,
+    iter::MapWhile,
+    ops::{BitXor, Index},
+};
 
 use crate::{
     bitboard::{BitBoard, Square},
     evaluation::{Evaluation, PestoEvaluation},
 };
-const ALL_STARTING_BOARD: BitBoard = BitBoard(18446462598732906495);
-const WHITE_STARTING_BOARD: BitBoard = BitBoard(65535);
-const BLACK_STARTING_BOARD: BitBoard = BitBoard(18446462598732840960);
-const WHITE_STARTING_BOARD_BY_PIECE: [BitBoard; 6] = [
-    BitBoard(66),
-    BitBoard(16),
-    BitBoard(36),
-    BitBoard(65280),
-    BitBoard(129),
-    BitBoard(8),
-];
-const BLACK_STARTING_BOARD_BY_PIECE: [BitBoard; 6] = [
-    BitBoard(2594073385365405696),
-    BitBoard(1152921504606846976),
-    BitBoard(4755801206503243776),
-    BitBoard(71776119061217280),
-    BitBoard(9295429630892703744),
-    BitBoard(576460752303423488),
-];
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
 pub struct CastlingRights(pub u8);
@@ -107,6 +92,13 @@ pub enum PieceType {
     Rook,
     Queen,
 }
+impl Index<PieceType> for [BitBoard; 6] {
+    type Output = BitBoard;
+    #[inline(always)]
+    fn index(&self, index: PieceType) -> &Self::Output {
+        &self[index as usize]
+    }
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Board {
@@ -124,23 +116,12 @@ pub struct Board {
     pub mg_score: i16,
     pub eg_score: i16,
     pub phase: i16,
+
+    pub side_to_move: Color,
 }
 impl Default for Board {
     fn default() -> Self {
-        let occupied_by_color = [WHITE_STARTING_BOARD, BLACK_STARTING_BOARD];
-        let pieces = [WHITE_STARTING_BOARD_BY_PIECE, BLACK_STARTING_BOARD_BY_PIECE];
-        let castling_rights = CastlingRights::new(true, true, true, true);
-
-        Board {
-            mailbox: Board::fill_mailbox(),
-            pieces,
-            occupied_by_color,
-            castling_rights,
-            en_passant_square: None,
-            mg_score: 0,
-            eg_score: 0,
-            phase: 24,
-        }
+        Board::from_FEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".to_string())
     }
 }
 impl Display for Board {
@@ -304,6 +285,7 @@ impl Board {
             mg_score,
             eg_score,
             phase,
+            side_to_move: curr_move,
         }
     }
     pub fn from_FEN(fen_string: String) -> Board {
@@ -420,6 +402,19 @@ pub enum Color {
     White,
     Black,
 }
+impl Index<Color> for [[BitBoard; 6]; 2] {
+    type Output = [BitBoard; 6];
+    #[inline(always)]
+    fn index(&self, index: Color) -> &Self::Output {
+        &self[index as usize]
+    }
+}
+impl BitXor<u8> for Color {
+    type Output = Color;
+    fn bitxor(self, rhs: u8) -> Self::Output {
+        Color::from_u8_unchecked(self as u8 ^ rhs)
+    }
+}
 impl Color {
     pub const fn from_u8_unchecked(v: u8) -> Self {
         if v > 1 {
@@ -511,7 +506,6 @@ mod debug_tests {
         assert!(false)
     }
     #[test]
-    #[ignore]
     fn kiwipete_from_FEN() {
         let b = Board::from_FEN(
             "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1".to_string(),

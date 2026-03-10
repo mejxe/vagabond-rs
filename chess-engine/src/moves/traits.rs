@@ -1,6 +1,7 @@
 use crate::{
     bitboard::{BitBoard, Square},
     board::Color,
+    evaluation::Evaluation,
 };
 
 pub trait Castle {
@@ -80,7 +81,7 @@ pub trait Side {
     const COLOR: Color;
     const STARTING_RANK: u64;
     const PROMOTION_RANK: u64;
-    type Opposite: Side;
+    type Opposite: Side + Castle + Evaluation;
 }
 impl<S: Side> PawnDirection for S {
     const SHIFT: u8 = 8;
