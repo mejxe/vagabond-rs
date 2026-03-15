@@ -1,11 +1,16 @@
 use crate::{
-    ai::ai::AI,
-    ai::evaluation::{Evaluation, PestoEvaluation},
-    board::bitboard::Square,
-    board::board::{Board, CastlingRights, Color, Piece, PieceType},
+    ai::{
+        ai::AI,
+        evaluation::{Evaluation, PestoEvaluation},
+    },
+    board::{
+        bitboard::Square,
+        board::{Board, CastlingRights, Color, Piece, PieceType},
+    },
     moves::{
         leapers::KNIGHT_ATK_TABLE,
-        move_generator::{Move, MoveGenerator, MoveType, Promotion, Undo},
+        move_generator::{MoveGenerator, Undo},
+        move_structs::{Move, MoveType},
         sliders::CASTLING_MASK,
         traits::{Black, Castle, PawnDirection, Side, White},
     },
@@ -217,11 +222,14 @@ pub fn undo_move<S: Side + Castle + Evaluation>(mv: Move, board: &mut Board, und
 
 mod tests {
     use crate::{
-        board::bitboard::Square,
-        board::board::{Board, Color, PieceType},
+        board::{
+            bitboard::Square,
+            board::{Board, Color, PieceType},
+        },
         engine::undo_move,
         moves::{
-            move_generator::{Move, MoveGenerator, MoveList, MoveType},
+            move_generator::{MoveGenerator, MoveList},
+            move_structs::{Move, MoveType},
             traits::White,
         },
     };
@@ -316,7 +324,7 @@ mod debug_tests {
         for mv in moves {
             println!("{mv}");
         }
-        make_move::<White>(&mut board, moves[0]);
+        make_move::<White>(&mut board, moves[0].mv);
         println!("{}", board.get_pieces(PieceType::Knight, Color::White));
         let mut move_list = MoveList::default();
         move_generator.generate_quiets::<White>(&mut move_list, &board);
@@ -324,7 +332,7 @@ mod debug_tests {
         for mv in moves {
             println!("{mv}");
         }
-        make_move::<White>(&mut board, moves[5]);
+        make_move::<White>(&mut board, moves[5].mv);
         println!("{}", board.get_pieces(PieceType::Knight, Color::White));
         let mut move_list = MoveList::default();
         move_generator.generate_captures::<White>(&mut move_list, &board);
@@ -333,7 +341,7 @@ mod debug_tests {
         for mv in moves {
             println!("{mv}");
         }
-        make_move::<White>(&mut board, moves[0]);
+        make_move::<White>(&mut board, moves[0].mv);
         println!("{}", board.get_pieces(PieceType::Knight, Color::White));
         println!("{}", board.black_occupied());
         println!("{}", board);
@@ -353,7 +361,7 @@ mod debug_tests {
         for (i, mv) in moves.iter().enumerate() {
             println!("{i}: {mv}");
         }
-        make_move::<White>(&mut board, moves[7]);
+        make_move::<White>(&mut board, moves[7].mv);
         let mut move_list = MoveList::default();
         move_generator.generate_quiets::<White>(&mut move_list, &board);
         let moves = move_list.as_slice();

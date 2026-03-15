@@ -1,8 +1,12 @@
+use std::fmt::Display;
+
 use crate::{
     ai::evaluation::Evaluation,
     board::bitboard::{BitBoard, Square},
     board::board::Color,
 };
+
+use super::move_structs::ExtMove;
 
 pub trait Castle {
     const KING_SIDE: BitBoard;
@@ -123,4 +127,10 @@ impl Side for Black {
     const STARTING_RANK: u64 = 0xFF << (6 * 8);
     const PROMOTION_RANK: u64 = 0xFF;
     type Opposite = White;
+}
+
+impl Display for ExtMove {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} | score: {}", self.mv, self.score)
+    }
 }

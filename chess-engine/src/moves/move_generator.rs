@@ -1,4 +1,4 @@
-use std::{arch::x86_64::_pext_u64, fmt::Display};
+use std::{arch::x86_64::_pext_u64, fmt::Display, path::Iter};
 
 use crate::{
     board::bitboard::{self, BitBoard, Square},
@@ -13,6 +13,7 @@ use super::{
     leapers::{
         B_PAWN_ATK_TABLE, KING_ATK_TABLE, KNIGHT_ATK_TABLE, PAWN_ATK_TABLE, W_PAWN_ATK_TABLE,
     },
+    move_structs::{ExtMove, Move, MoveType},
     traits::{Black, Castle, PawnDirection, Side, White},
 };
 
@@ -22,101 +23,18 @@ pub struct Undo {
     pub previous_ep_square: Option<Square>,
     pub castling_rights: CastlingRights,
 }
-#[repr(transparent)]
-#[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Copy, Clone)]
-pub struct Move(u16);
-impl Move {
-    pub fn new(from: Square, to: Square, move_type: MoveType) -> Self {
-        let mut r#move = 0u16;
-        r#move |= from as u16;
-        r#move |= (to as u16) << 6;
-        r#move |= (move_type as u16) << 12;
-        Self(r#move)
-    }
-
-    pub fn from(&self) -> Square {
-        Square::from_u8_unchecked((self.0 & 0x3F) as u8)
-    }
-    pub fn to(&self) -> Square {
-        Square::from_u8_unchecked(((self.0 >> 6) & 0x3F) as u8)
-    }
-    pub fn move_type(&self) -> MoveType {
-        MoveType::from_u8_unchecked(((self.0 >> 12) & 0xF) as u8)
-    }
-    pub fn promotion_to(&self) -> Option<PieceType> {
-        match self.move_type() {
-            MoveType::BishopCapturePromotion | MoveType::BishopPromotion => Some(PieceType::Bishop),
-            MoveType::KnightCapturePromotion | MoveType::KnightPromotion => Some(PieceType::Knight),
-            MoveType::RookCapturePromotion | MoveType::RookPromotion => Some(PieceType::Rook),
-            MoveType::QueenCapturePromotion | MoveType::QueenPromotion => Some(PieceType::Queen),
-            _ => None,
-        }
-    }
-}
-pub enum Promotion {
-    ToBishop,
-    ToKnight,
-    ToRook,
-    ToQueen,
-}
-impl Display for Move {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} to {}, {:?}",
-            self.from(),
-            self.to(),
-            self.move_type()
-        )
-    }
-}
-#[repr(u8)]
-#[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Copy, Clone)]
-pub enum MoveType {
-    Quiet,
-    Capture,
-    DoublePush,
-    KingSideCastle,
-    QueenSideCastle,
-    EnPassant,
-    BishopPromotion,
-    KnightPromotion,
-    RookPromotion,
-    QueenPromotion,
-    BishopCapturePromotion,
-    KnightCapturePromotion,
-    RookCapturePromotion,
-    QueenCapturePromotion,
-}
-impl MoveType {
-    const VARIANTS: u8 = 13;
-    pub fn is_capture(&self) -> bool {
-        match self {
-            MoveType::Capture => true,
-            MoveType::QueenCapturePromotion => true,
-            MoveType::RookCapturePromotion => true,
-            MoveType::BishopCapturePromotion => true,
-            MoveType::KnightCapturePromotion => true,
-            MoveType::EnPassant => true,
-            _ => false,
-        }
-    }
-    pub const fn from_u8_unchecked(v: u8) -> Self {
-        if v > Self::VARIANTS {
-            panic!("Value doesn't match an Move Type");
-        }
-        unsafe { std::mem::transmute(v) }
-    }
-}
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct MoveList {
-    moves: [Move; 256],
+    moves: [ExtMove; 256],
     count: usize,
 }
 impl Default for MoveList {
     fn default() -> Self {
         MoveList {
-            moves: [Move(0); 256],
+            moves: [ExtMove {
+                mv: Move(0),
+                score: 0,
+            }; 256],
             count: 0,
         }
     }
@@ -126,12 +44,55 @@ impl MoveList {
         // safe because there will be never more than 256 moves per depth
         debug_assert!(self.count < 256);
         unsafe {
-            *self.moves.get_unchecked_mut(self.count) = mv;
+            *self.moves.get_unchecked_mut(self.count) = ExtMove { mv, score: 0 };
             self.count += 1;
         }
     }
-    pub fn as_slice(&self) -> &[Move] {
+    pub fn reset_count(&mut self) {
+        self.count = 0;
+    }
+    pub fn as_slice(&self) -> &[ExtMove] {
         &self.moves[0..self.count]
+    }
+    pub fn score_moves(&mut self, board: &Board, ply: u8, killers: &[[Option<Move>; 2]; 64]) {
+        for mv in self.moves[..self.count].iter_mut() {
+            mv.score_move(board, ply, killers);
+        }
+    }
+    pub fn move_fetcher(&mut self) -> MoveFetcher<'_> {
+        MoveFetcher {
+            moves: &mut self.moves[..self.count],
+            current: 0,
+        }
+    }
+}
+pub struct MoveFetcher<'a> {
+    moves: &'a mut [ExtMove],
+    current: usize,
+}
+impl<'a> Iterator for MoveFetcher<'a> {
+    type Item = ExtMove;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current >= self.moves.len() {
+            return None;
+        }
+        if self.moves[self.current].score == 0 {
+            let mv = self.moves[self.current];
+            self.current += 1;
+            return Some(mv);
+        }
+        let mut max_index = self.current;
+        let mut max_val = self.moves[self.current].score;
+        for i in self.current + 1..self.moves.len() {
+            if self.moves[i].score > max_val {
+                max_index = i;
+                max_val = self.moves[i].score;
+            }
+        }
+        self.moves.swap(max_index, self.current);
+        self.current += 1;
+        Some(self.moves[max_index])
     }
 }
 pub struct MoveGenerator {
@@ -577,11 +538,14 @@ mod tests {
 
     use crate::{
         ai::evaluation::Evaluation,
-        board::bitboard::Square,
-        board::board::{Board, Color, PieceType},
+        board::{
+            bitboard::Square,
+            board::{Board, Color, PieceType},
+        },
         engine::{make_move, undo_move},
         moves::{
-            move_generator::{Move, MoveGenerator, MoveList, MoveType},
+            move_generator::{MoveGenerator, MoveList},
+            move_structs::{Move, MoveType},
             sliders::{BISHOP_MASK_TABLE, ROOK_MASK_TABLE},
             traits::{Black, Castle, PawnDirection, Side, White},
         },
@@ -696,7 +660,7 @@ mod debug_tests {
         },
     };
 
-    use super::{Move, MoveGenerator, MoveList, MoveType, Occupancy, Square};
+    use super::{MoveGenerator, MoveList, Occupancy, Square};
     #[test]
     #[ignore]
     fn test_rook_moves_generation() {
@@ -738,8 +702,8 @@ mod debug_tests {
         for mv in moves {
             println!("{mv}");
         }
-        let undo = make_move::<White>(&mut board, capture);
-        undo_move::<White>(capture, &mut board, undo);
+        let undo = make_move::<White>(&mut board, capture.mv);
+        undo_move::<White>(capture.mv, &mut board, undo);
         println!("{board}");
         assert!(false);
     }

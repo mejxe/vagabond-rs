@@ -16,7 +16,7 @@ use chess_engine::{
 fn main() {
     //let mut board = Board::from_FEN("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1".to_string(),);
     //assert_eq!(4865609, perft_divide::<White>(&mut board, 4));
-    //test_nega_max();
+    test_nega_max();
     //let mut board =
     //    Board::from_FEN("rnb2k1r/pp1Pbppp/2p5/q7/2B5/8/PPP1NnPP/RNBQK2R w KQ - 0 1".to_string());
     //let mvg = MoveGenerator::default();
@@ -25,7 +25,7 @@ fn main() {
     //for mv in move_list.as_slice() {
     //    println!("{mv}");
     //}
-    test_perft();
+    //test_perft();
 }
 fn test_move_rating() {
     let mut board = Board::from_FEN("4k3/8/8/4N3/8/8/8/4K3 w - - 0 1".to_string());
@@ -40,8 +40,9 @@ fn test_perft() {
         "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - ".to_string(),
     ); // kiwipete
     let mut board = Board::from_FEN("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1 ".to_string()); // pos 3 cpw
-    let mut board =
-        Board::from_FEN("rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8  ".to_string()); //tricky pos
+    let mut board = Board::from_FEN(
+        "r1bq2r1/b4pk1/p1pp1p2/1p2pP2/1P2P1PB/3P4/1PPQ2P1/R3K2R w KQ - 0 1".to_string(),
+    ); //tricky pos
 
     perft_divide_by_move_type::<White>(&mut board, 5);
 }
@@ -56,12 +57,12 @@ fn test_nega_max() {
     );
     println!("{}", board);
     let mvg = MoveGenerator::default();
-    for i in 0..5 {
-        let move_made = AI::make_decision(5, &mvg, &mut board);
+    for i in 0..1 {
+        let move_made = AI::make_decision(7, &mvg, &mut board);
         make_move::<White>(&mut board, move_made.unwrap());
         board.side_to_move = board.side_to_move ^ 1;
         println!("{i}: {}", move_made.unwrap());
-        let move_made = AI::make_decision(5, &mvg, &mut board);
+        let move_made = AI::make_decision(7, &mvg, &mut board);
         make_move::<Black>(&mut board, move_made.unwrap());
         board.side_to_move = board.side_to_move ^ 1;
         println!("{}: {}", i + 1, move_made.unwrap());

@@ -2,11 +2,14 @@ use std::ops::{Add, AddAssign};
 
 use crate::{
     ai::evaluation::Evaluation,
-    board::bitboard::Square,
-    board::board::{Board, Color, PieceType},
+    board::{
+        bitboard::Square,
+        board::{Board, Color, PieceType},
+    },
     engine::{make_move, undo_move},
     moves::{
-        move_generator::{MoveGenerator, MoveList, MoveType},
+        move_generator::{MoveGenerator, MoveList},
+        move_structs::MoveType,
         traits::{Black, Castle, PawnDirection, Side, White},
     },
 };
@@ -30,7 +33,7 @@ pub fn perft_divide<S: Side + Castle + Evaluation + PawnDirection>(
     move_generator.generate_moves_generic::<S>(&mut move_list, board);
 
     for mv in move_list.as_slice() {
-        let undo = make_move::<S>(board, *mv);
+        let undo = make_move::<S>(board, mv.mv);
 
         let king_bits = board.get_pieces(PieceType::King, S::COLOR).0;
 
@@ -46,7 +49,7 @@ pub fn perft_divide<S: Side + Castle + Evaluation + PawnDirection>(
             }
         }
 
-        undo_move::<S>(*mv, board, undo);
+        undo_move::<S>(mv.mv, board, undo);
     }
 
     println!("-----------------------");
@@ -67,7 +70,7 @@ pub fn perft<S: Side + Castle + Evaluation>(
     move_generator.generate_moves_generic::<S>(&mut move_list, board);
     let moves = move_list.as_slice();
     for mv in moves {
-        let undo = make_move::<S>(board, *mv);
+        let undo = make_move::<S>(board, mv.mv);
         //println!("board: {}", board);
 
         let king_square = Square::from_u8_unchecked(
@@ -84,7 +87,7 @@ pub fn perft<S: Side + Castle + Evaluation>(
             nodes += new_nodes;
         }
 
-        undo_move::<S>(*mv, board, undo);
+        undo_move::<S>(mv.mv, board, undo);
         //println!("undo_board: {}", board);
     }
     nodes
@@ -137,7 +140,7 @@ pub fn perft_by_move_type<S: Side + Castle + Evaluation>(
     move_generator.generate_moves_generic::<S>(&mut move_list, board);
     let moves = move_list.as_slice();
     for mv in moves {
-        let undo = make_move::<S>(board, *mv);
+        let undo = make_move::<S>(board, mv.mv);
         //println!("board: {}", board);
 
         let king_square = Square::from_u8_unchecked(
@@ -150,12 +153,16 @@ pub fn perft_by_move_type<S: Side + Castle + Evaluation>(
             // TODO: fix that returning true always
             //      println!("{}", board.get_piece_at_square(mv.to()).unwrap());
             //      println!("move: {}, {nodes}", mv);
-            let new_moves =
-                perft_by_move_type::<S::Opposite>(move_generator, board, depth - 1, mv.move_type());
+            let new_moves = perft_by_move_type::<S::Opposite>(
+                move_generator,
+                board,
+                depth - 1,
+                mv.mv.move_type(),
+            );
             perft_moves += new_moves;
         }
 
-        undo_move::<S>(*mv, board, undo);
+        undo_move::<S>(mv.mv, board, undo);
         //println!("undo_board: {}", board);
     }
     perft_moves
@@ -177,7 +184,7 @@ pub fn perft_divide_by_move_type<S: Side + Castle + Evaluation + PawnDirection>(
     move_generator.generate_moves_generic::<S>(&mut move_list, board);
 
     for mv in move_list.as_slice() {
-        let undo = make_move::<S>(board, *mv);
+        let undo = make_move::<S>(board, mv.mv);
 
         let king_bits = board.get_pieces(PieceType::King, S::COLOR).0;
 
@@ -189,7 +196,7 @@ pub fn perft_divide_by_move_type<S: Side + Castle + Evaluation + PawnDirection>(
                     &move_generator,
                     board,
                     depth - 1,
-                    mv.move_type(),
+                    mv.mv.move_type(),
                 );
 
                 println!("{}: {:?}", mv, nodes);
@@ -198,7 +205,7 @@ pub fn perft_divide_by_move_type<S: Side + Castle + Evaluation + PawnDirection>(
             }
         }
 
-        undo_move::<S>(*mv, board, undo);
+        undo_move::<S>(mv.mv, board, undo);
     }
 
     let sum = total_nodes.captures + total_nodes.castles + total_nodes.quiets;
