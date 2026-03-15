@@ -1,8 +1,8 @@
 use crate::{
     ai::ai::AI,
-    bitboard::Square,
-    board::{Board, CastlingRights, Color, Piece, PieceType},
-    evaluation::{Evaluation, PestoEvaluation},
+    ai::evaluation::{Evaluation, PestoEvaluation},
+    board::bitboard::Square,
+    board::board::{Board, CastlingRights, Color, Piece, PieceType},
     moves::{
         leapers::KNIGHT_ATK_TABLE,
         move_generator::{Move, MoveGenerator, MoveType, Promotion, Undo},
@@ -45,21 +45,6 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
     let from = mv.from();
     let to = mv.to();
     let move_type = mv.move_type();
-    if !move_type.is_capture() && mv.promotion_to().is_none() {
-        let is_castle = matches!(
-            move_type,
-            MoveType::KingSideCastle | MoveType::QueenSideCastle
-        );
-        if !is_castle {
-            assert!(
-                board.get_piece_at_square(to).is_none(),
-                "FATAL: Quiet move landed on an occupied square! Move: {}, from: {}, to: {}",
-                mv,
-                from,
-                to
-            );
-        }
-    }
     let mut undo_move = Undo {
         castling_rights: board.castling_rights(),
         previous_ep_square: board.en_passant_square(),
@@ -67,10 +52,7 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
     };
     board.set_en_passant_square(None);
     let color = S::COLOR;
-    let mover = board.get_piece_at_square(from).expect(&format!(
-        "{mv}\n{board}\n{}",
-        board.get_pieces(PieceType::Rook, Color::Black)
-    ));
+    let mover = board.get_piece_at_square(from).unwrap();
     if move_type.is_capture() {
         let piece_pos = if let MoveType::EnPassant = move_type {
             let pos = S::get_source_single(to);
@@ -79,15 +61,11 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
             to
         };
         let opposite_color = S::Opposite::COLOR;
-        let captured = board.get_piece_at_square(piece_pos).expect(&format!(
-            "{mv}\n{}\n{}",
-            board.occupied_by_color(Color::White),
-            board.get_pieces(PieceType::Bishop, Color::White)
-        ));
+        let captured = board.get_piece_at_square(piece_pos).unwrap();
         undo_move.captured_piece = Some(captured.piece_type);
         // update evaluation
         board.phase -= PestoEvaluation::PIECE_PHASE_INCR[captured.piece_type as usize]; // - phase of captured
-        board.add_score::<S>(piece_pos, captured); // + value of captured
+        board.subtract_score::<S::Opposite>(piece_pos, captured); // + value of captured
 
         let cap_mask = 1u64 << (piece_pos as u8);
         board.occupied_by_color[opposite_color as usize].0 ^= cap_mask;
@@ -114,6 +92,7 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
         // update evaluation
         board.phase += PestoEvaluation::PIECE_PHASE_INCR[promotion as usize]; // + phase of promoted
         board.add_score::<S>(to, new_piece); //+ val of promoted
+        board.subtract_score::<S>(from, mover); // - val of old square
     } else {
         let rook = Piece {
             piece_type: PieceType::Rook,
@@ -173,7 +152,8 @@ pub fn undo_move<S: Side + Castle + Evaluation>(mv: Move, board: &mut Board, und
             color,
         };
         board.phase -= PestoEvaluation::PIECE_PHASE_INCR[promotion as usize]; // - phase of promoted
-        board.add_score::<S>(to, new_piece); //+ val of promoted
+        board.add_score::<S>(from, new_piece); //+ val of promoted
+        board.subtract_score::<S>(to, mover); // - val of old square
         board.set_piece_at_square(to, None);
         board.set_piece_at_square(from, Some(new_piece));
     } else {
@@ -227,7 +207,7 @@ pub fn undo_move<S: Side + Castle + Evaluation>(mv: Move, board: &mut Board, und
         board.occupied_by_color[opposite_color as usize].0 ^= cap_mask;
         board.pieces[opposite_color as usize][captured.piece_type as usize].0 ^= cap_mask;
         board.phase += PestoEvaluation::PIECE_PHASE_INCR[captured.piece_type as usize]; // - phase of captured
-        board.subtract_score::<S>(piece_pos, captured);
+        board.add_score::<S::Opposite>(piece_pos, captured);
         board.set_piece_at_square(piece_pos, Some(captured));
     }
 
@@ -237,8 +217,8 @@ pub fn undo_move<S: Side + Castle + Evaluation>(mv: Move, board: &mut Board, und
 
 mod tests {
     use crate::{
-        bitboard::Square,
-        board::{Board, Color, PieceType},
+        board::bitboard::Square,
+        board::board::{Board, Color, PieceType},
         engine::undo_move,
         moves::{
             move_generator::{Move, MoveGenerator, MoveList, MoveType},
@@ -316,7 +296,7 @@ mod tests {
 }
 mod debug_tests {
     use crate::{
-        board::{Board, Color, PieceType},
+        board::board::{Board, Color, PieceType},
         moves::{
             move_generator::{MoveGenerator, MoveList},
             traits::White,

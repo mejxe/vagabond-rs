@@ -1,7 +1,7 @@
-use crate::bitboard::BitBoard;
-use crate::bitboard::Square;
-use crate::board::Color;
-use crate::board::PieceType;
+use crate::board::bitboard::BitBoard;
+use crate::board::bitboard::Square;
+use crate::board::board::Color;
+use crate::board::board::PieceType;
 
 pub const NOT_A_COLUMN: BitBoard = {
     let mut tbl = BitBoard(u64::MAX);

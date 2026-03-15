@@ -1,7 +1,7 @@
 use crate::{
-    bitboard::{BitBoard, Square},
-    board::Color,
-    evaluation::Evaluation,
+    ai::evaluation::Evaluation,
+    board::bitboard::{BitBoard, Square},
+    board::board::Color,
 };
 
 pub trait Castle {

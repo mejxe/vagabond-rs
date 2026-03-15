@@ -5,61 +5,10 @@ use std::{
 };
 
 use crate::{
-    bitboard::{BitBoard, Square},
-    evaluation::{Evaluation, PestoEvaluation},
+    ai::evaluation::{Evaluation, PestoEvaluation},
+    board::bitboard::{BitBoard, Square},
 };
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
-pub struct CastlingRights(pub u8);
-impl CastlingRights {
-    pub fn new(K: bool, Q: bool, k: bool, q: bool) -> Self {
-        let mut rights = 0u8;
-        rights |= ((K as u8) << 3) | ((Q as u8) << 2) | ((k as u8) << 1) | (q as u8);
-        CastlingRights(rights)
-    }
-    pub fn from_mask(mask: u8) -> Self {
-        if mask > 0b1111 {
-            panic!("Incorrect mask format.");
-        }
-        CastlingRights(mask)
-    }
-    pub fn K(&self) -> bool {
-        (self.0 >> 3 & 1) != 0
-    }
-    pub fn Q(&self) -> bool {
-        (self.0 >> 2 & 1) != 0
-    }
-    pub fn k(&self) -> bool {
-        (self.0 >> 1 & 1) != 0
-    }
-    pub fn q(&self) -> bool {
-        (self.0 & 1) != 0
-    }
-    pub fn for_color(&self, color: Color) -> bool {
-        match color {
-            Color::Black => self.k() & self.q(),
-            Color::White => self.K() & self.Q(),
-        }
-    }
-}
-impl Display for CastlingRights {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut s = String::new();
-        if self.K() {
-            s.push('K');
-        }
-        if self.Q() {
-            s.push('Q');
-        }
-        if self.k() {
-            s.push('k');
-        }
-        if self.q() {
-            s.push('q');
-        }
-        write!(f, "{s}")
-    }
-}
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Piece {
     pub piece_type: PieceType,
@@ -92,17 +41,10 @@ pub enum PieceType {
     Rook,
     Queen,
 }
-impl Index<PieceType> for [BitBoard; 6] {
-    type Output = BitBoard;
-    #[inline(always)]
-    fn index(&self, index: PieceType) -> &Self::Output {
-        &self[index as usize]
-    }
-}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Board {
-    mailbox: [Option<Piece>; 64],
+    pub(crate) mailbox: [Option<Piece>; 64],
 
     pub occupied_by_color: [BitBoard; 2],
 
@@ -118,35 +60,6 @@ pub struct Board {
     pub phase: i16,
 
     pub side_to_move: Color,
-}
-impl Default for Board {
-    fn default() -> Self {
-        Board::from_FEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".to_string())
-    }
-}
-impl Display for Board {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut board = String::new();
-        for row in (0..8u8).rev() {
-            board.push_str(&format!(
-                "{} ",
-                char::from_digit((row + 1).into(), 10).unwrap()
-            ));
-            for col in 0..8u8 {
-                match self.mailbox[(row * 8 + col) as usize] {
-                    Some(piece) => board.push_str(&format!(" {} ", piece)),
-                    None => board.push_str(&format!("   ")),
-                }
-            }
-            board.push('\n');
-        }
-        board.push_str("\n   A  B  C  D  E  F  G  H \n");
-        board.push_str(&format!(
-            "\n castling: {} | en_passant_square = {:?}",
-            self.castling_rights, self.en_passant_square
-        ));
-        write!(f, "{}", board)
-    }
 }
 impl Board {
     const fn fill_mailbox() -> [Option<Piece>; 64] {
@@ -275,7 +188,7 @@ impl Board {
                 occupied_by_color[piece.color as usize].0 ^= 1u64 << i;
             }
         }
-        let (mg_score, eg_score, phase) = Board::evaluate_whole_board(mailbox, curr_move);
+        let (mg_score, eg_score, phase) = Board::evaluate_whole_board(mailbox);
         Board {
             mailbox,
             occupied_by_color,
@@ -334,12 +247,19 @@ impl Board {
         let en_passant_square = chess_notation_to_sq(ep_square);
         Board::from_mailbox(mailbox, to_move, castling_rights, en_passant_square)
     }
-    fn evaluate_whole_board(mailbox: [Option<Piece>; 64], current_move: Color) -> (i16, i16, i16) {
+    fn evaluate_whole_board(mailbox: [Option<Piece>; 64]) -> (i16, i16, i16) {
         let mut mg_scores = [0; 2]; // per color
         let mut eg_scores = [0; 2];
         let mut game_phase = 0;
         for (i, possible_piece) in mailbox.into_iter().enumerate() {
             if let Some(piece) = possible_piece {
+                println!("{}", Square::from_u8_unchecked(i as u8));
+                let eval = PestoEvaluation::get_mg_score(Square::from_u8_unchecked(i as u8), piece);
+                let eval = match piece.color {
+                    Color::White => eval,
+                    Color::Black => -eval,
+                };
+                println!("{}", eval);
                 mg_scores[piece.color as usize] +=
                     PestoEvaluation::get_mg_score(Square::from_u8_unchecked(i as u8), piece);
                 eg_scores[piece.color as usize] +=
@@ -347,14 +267,18 @@ impl Board {
                 game_phase += PestoEvaluation::PIECE_PHASE_INCR[piece.piece_type as usize];
             }
         }
+        dbg!(mg_scores[0] - mg_scores[1]);
+        dbg!(eg_scores[0] - eg_scores[1]);
         (
-            mg_scores[current_move as usize] - mg_scores[current_move as usize ^ 1],
-            eg_scores[current_move as usize] - eg_scores[current_move as usize ^ 1],
+            mg_scores[0] - mg_scores[1],
+            eg_scores[0] - eg_scores[1],
             game_phase,
         )
     }
     pub fn evaluate(&self) -> i16 {
-        (self.mg_score / 24 * self.phase + self.eg_score / 24 * (24 - self.phase))
+        let mg = self.mg_score as i32 * self.phase as i32;
+        let eg = self.eg_score as i32 * (24 - self.phase as i32);
+        ((mg + eg) / 24) as i16
     }
     pub fn add_score<S: Evaluation>(&mut self, square: Square, piece: Piece) {
         self.mg_score += PestoEvaluation::get_mg_score(square, piece) * S::MULTIPLIER;
@@ -402,42 +326,57 @@ pub enum Color {
     White,
     Black,
 }
-impl Index<Color> for [[BitBoard; 6]; 2] {
-    type Output = [BitBoard; 6];
-    #[inline(always)]
-    fn index(&self, index: Color) -> &Self::Output {
-        &self[index as usize]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
+pub struct CastlingRights(pub u8);
+impl CastlingRights {
+    pub fn new(K: bool, Q: bool, k: bool, q: bool) -> Self {
+        let mut rights = 0u8;
+        rights |= ((K as u8) << 3) | ((Q as u8) << 2) | ((k as u8) << 1) | (q as u8);
+        CastlingRights(rights)
     }
-}
-impl BitXor<u8> for Color {
-    type Output = Color;
-    fn bitxor(self, rhs: u8) -> Self::Output {
-        Color::from_u8_unchecked(self as u8 ^ rhs)
-    }
-}
-impl Color {
-    pub const fn from_u8_unchecked(v: u8) -> Self {
-        if v > 1 {
-            panic!("Color does not match");
+    pub fn from_mask(mask: u8) -> Self {
+        if mask > 0b1111 {
+            panic!("Incorrect mask format.");
         }
-        unsafe { std::mem::transmute(v) }
+        CastlingRights(mask)
     }
-}
-impl Display for Color {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let color = match self {
-            Color::White => "White",
-            Color::Black => "Black",
-        };
-        write!(f, "{}", color)
+    pub fn K(&self) -> bool {
+        (self.0 >> 3 & 1) != 0
+    }
+    pub fn Q(&self) -> bool {
+        (self.0 >> 2 & 1) != 0
+    }
+    pub fn k(&self) -> bool {
+        (self.0 >> 1 & 1) != 0
+    }
+    pub fn q(&self) -> bool {
+        (self.0 & 1) != 0
+    }
+    pub fn for_color(&self, color: Color) -> bool {
+        match color {
+            Color::Black => self.k() & self.q(),
+            Color::White => self.K() & self.Q(),
+        }
+    }
+    pub fn k_for_color(&self, color: Color) -> bool {
+        match color {
+            Color::White => self.K(),
+            Color::Black => self.k(),
+        }
+    }
+    pub fn q_for_color(&self, color: Color) -> bool {
+        match color {
+            Color::White => self.Q(),
+            Color::Black => self.q(),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{
-        bitboard::{BitBoard, Square},
-        board::{Color, PieceType},
+        board::bitboard::{BitBoard, Square},
+        board::board::{Color, PieceType},
         moves::traits::White,
     };
 
@@ -479,8 +418,8 @@ mod tests {
 mod debug_tests {
     use super::Board;
     use crate::{
-        bitboard::{BitBoard, Square},
-        board::{Color, PieceType},
+        board::bitboard::{BitBoard, Square},
+        board::board::{Color, PieceType},
         moves::traits::White,
     };
 
@@ -498,10 +437,7 @@ mod debug_tests {
             "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq e3 0 3".to_string(),
         );
         println!("{}", ep.all_occupied());
-        println!(
-            "{}",
-            ep.get_pieces(crate::board::PieceType::Bishop, Color::White)
-        );
+        println!("{}", ep.get_pieces(PieceType::Bishop, Color::White));
         println!("{ep}");
         assert!(false)
     }
@@ -511,10 +447,7 @@ mod debug_tests {
             "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1".to_string(),
         );
         println!("{}", b.all_occupied());
-        println!(
-            "{}",
-            b.get_pieces(crate::board::PieceType::Bishop, Color::White)
-        );
+        println!("{}", b.get_pieces(PieceType::Bishop, Color::White));
         println!("{b}");
         assert!(false)
     }

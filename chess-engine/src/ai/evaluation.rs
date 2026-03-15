@@ -1,8 +1,8 @@
 use std::cmp::min;
 
 use crate::{
-    bitboard::Square,
-    board::{Color, Piece, PieceType},
+    board::bitboard::Square,
+    board::board::{Color, Piece, PieceType},
     moves::traits::{Black, White},
 };
 
@@ -86,11 +86,11 @@ impl PestoEvaluation {
     pub fn get_mg_score(square: Square, piece: Piece) -> i16 {
         match piece.color {
             Color::White => {
-                Self::MG_TABLE[piece.piece_type as usize][square as usize]
+                Self::MG_TABLE[piece.piece_type as usize][square as usize ^ 56]
                     + Self::MG_MATERIAL_VAL[piece.piece_type as usize]
             }
             Color::Black => {
-                Self::MG_TABLE[piece.piece_type as usize][(square as usize) ^ 56]
+                Self::MG_TABLE[piece.piece_type as usize][(square as usize)]
                     + Self::MG_MATERIAL_VAL[piece.piece_type as usize]
             }
         }
@@ -99,11 +99,11 @@ impl PestoEvaluation {
     pub fn get_eg_score(square: Square, piece: Piece) -> i16 {
         match piece.color {
             Color::White => {
-                Self::EG_TABLE[piece.piece_type as usize][square as usize]
+                Self::EG_TABLE[piece.piece_type as usize][square as usize ^ 56]
                     + Self::EG_MATERIAL_VAL[piece.piece_type as usize]
             }
             Color::Black => {
-                Self::EG_TABLE[piece.piece_type as usize][(square as usize) ^ 56]
+                Self::EG_TABLE[piece.piece_type as usize][(square as usize)]
                     + Self::EG_MATERIAL_VAL[piece.piece_type as usize]
             }
         }

@@ -1,9 +1,9 @@
 use std::arch::x86_64::_pext_u64;
 use std::sync::OnceLock;
 
-use crate::bitboard::BitBoard;
-use crate::bitboard::Square;
-use crate::board::PieceType;
+use crate::board::bitboard::BitBoard;
+use crate::board::bitboard::Square;
+use crate::board::board::PieceType;
 
 use super::move_generator::Occupancy;
 
@@ -212,8 +212,8 @@ const fn generate_pext(val: BitBoard, mut mask: BitBoard) -> u64 {
 pub mod debug_tests {
     use std::arch::x86_64::_pext_u64;
 
-    use crate::bitboard::BitBoard;
-    use crate::board::PieceType;
+    use crate::board::bitboard::BitBoard;
+    use crate::board::board::PieceType;
     use crate::moves::move_generator::Occupancy;
     use crate::moves::sliders::ROOK_MASK_TABLE;
     use crate::moves::sliders::generate_bishop_attacks;

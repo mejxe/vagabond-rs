@@ -1,8 +1,8 @@
 use std::{arch::x86_64::_pext_u64, fmt::Display};
 
 use crate::{
-    bitboard::{self, BitBoard, Square},
-    board::{Board, CastlingRights, Color, Piece, PieceType},
+    board::bitboard::{self, BitBoard, Square},
+    board::board::{Board, CastlingRights, Color, Piece, PieceType},
     moves::sliders::{
         BISHOP_MASK_TABLE, ROOK_MASK_TABLE, generate_bishop_attacks, generate_bishop_mask,
         generate_rook_attacks, generate_rook_mask,
@@ -329,14 +329,25 @@ impl MoveGenerator {
     }
     pub fn generate_castle_moves<S: Side + Castle>(&self, board: &Board, move_list: &mut MoveList) {
         let occupied = board.all_occupied();
-        if occupied.0 & S::KING_SIDE.0 == 0 {
+        let castling_rights = board.castling_rights();
+        if castling_rights.k_for_color(S::COLOR)
+            && occupied.0 & S::KING_SIDE.0 == 0
+            && !self.is_king_in_check(&board, S::COLOR)
+            && !self.is_square_attacked::<S>(&board, S::KING_SIDE_ROOK_POS)
+            && !self.is_square_attacked::<S>(&board, S::KING_SIDE_KING_POS)
+        {
             move_list.push(Move::new(
                 S::KING_START_POS,
                 S::KING_SIDE_KING_POS,
                 MoveType::KingSideCastle,
             ));
         }
-        if occupied.0 & S::QUEEN_SIDE.0 == 0 {
+        if castling_rights.q_for_color(S::COLOR)
+            && occupied.0 & S::QUEEN_SIDE.0 == 0
+            && !self.is_king_in_check(&board, S::COLOR)
+            && !self.is_square_attacked::<S>(&board, S::QUEEN_SIDE_ROOK_POS)
+            && !self.is_square_attacked::<S>(&board, S::QUEEN_SIDE_KING_POS)
+        {
             move_list.push(Move::new(
                 S::KING_START_POS,
                 S::QUEEN_SIDE_KING_POS,
@@ -358,12 +369,6 @@ impl MoveGenerator {
         let target_squares = BitBoard(attacks.0 & target.0);
         for to_square in target_squares {
             move_list.push(Move::new(from_square, to_square, move_type));
-            if (from_square == Square::G7 && to_square == Square::H8) {
-                dbg!(piece);
-                dbg!(move_type);
-                println!("{attacks}");
-                println!("{target}");
-            }
         }
     }
 
@@ -384,22 +389,22 @@ impl MoveGenerator {
         // promotions
         for square in promotion {
             move_list.push(Move::new(
-                S::get_source_double(square),
+                S::get_source_single(square),
                 square,
-                MoveType::QueenPromotion,
+                MoveType::BishopPromotion,
             ));
             move_list.push(Move::new(
-                S::get_source_double(square),
+                S::get_source_single(square),
                 square,
                 MoveType::RookPromotion,
             ));
             move_list.push(Move::new(
-                S::get_source_double(square),
+                S::get_source_single(square),
                 square,
                 MoveType::KnightPromotion,
             ));
             move_list.push(Move::new(
-                S::get_source_double(square),
+                S::get_source_single(square),
                 square,
                 MoveType::QueenPromotion,
             ));
@@ -429,12 +434,15 @@ impl MoveGenerator {
         let enemies = board.occupied_by_color(S::Opposite::COLOR);
         let pawns = board.get_pieces(PieceType::Pawn, color);
         for pawn_square in pawns {
-            let not_filttered_attacks = MoveGenerator::get_pawn_attack::<S>(pawn_square);
-            let attacks = not_filttered_attacks & enemies;
+            let filttered_attacks = BitBoard(
+                MoveGenerator::get_pawn_attack::<S>(pawn_square).0
+                    & !board.occupied_by_color(S::COLOR).0,
+            );
+            let attacks = filttered_attacks & enemies;
             let promotions = BitBoard(attacks.0 & S::PROMOTION_RANK as u64);
             let not_promotions = BitBoard(attacks.0 & !S::PROMOTION_RANK as u64);
             if let Some(en_passant_square) = board.en_passant_square() {
-                if (BitBoard(1u64 << en_passant_square as u64) & not_filttered_attacks).0 != 0 {
+                if (BitBoard(1u64 << en_passant_square as u64) & filttered_attacks).0 != 0 {
                     move_list.push(Move::new(
                         pawn_square,
                         en_passant_square,
@@ -478,6 +486,7 @@ impl MoveGenerator {
             Color::Black => self.is_square_attacked::<Black>(board, king),
         }
     }
+    #[inline(always)]
     pub fn is_square_attacked<S: Side>(&self, board: &Board, sq: Square) -> bool {
         let attacker_color = S::Opposite::COLOR;
         if (MoveGenerator::get_pawn_attack::<S>(sq).0
@@ -567,10 +576,10 @@ impl Occupancy {
 mod tests {
 
     use crate::{
-        bitboard::Square,
-        board::{Board, Color, PieceType},
+        ai::evaluation::Evaluation,
+        board::bitboard::Square,
+        board::board::{Board, Color, PieceType},
         engine::{make_move, undo_move},
-        evaluation::Evaluation,
         moves::{
             move_generator::{Move, MoveGenerator, MoveList, MoveType},
             sliders::{BISHOP_MASK_TABLE, ROOK_MASK_TABLE},
@@ -677,8 +686,8 @@ mod tests {
 #[cfg(test)]
 mod debug_tests {
     use crate::{
-        bitboard::BitBoard,
-        board::{Board, Color},
+        board::bitboard::BitBoard,
+        board::board::{Board, Color},
         engine::{make_move, undo_move},
         moves::{
             leapers::KNIGHT_ATK_TABLE,

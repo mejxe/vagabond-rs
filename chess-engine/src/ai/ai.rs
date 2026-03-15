@@ -1,10 +1,10 @@
 use std::f32::MIN;
 
 use crate::{
-    bitboard::Square,
-    board::{Board, Color},
+    ai::evaluation::Evaluation,
+    board::bitboard::Square,
+    board::board::{Board, Color},
     engine::{make_move, make_move_non_generic, undo_move, undo_move_non_generic},
-    evaluation::Evaluation,
     moves::{
         move_generator::{Move, MoveGenerator, MoveList},
         traits::{Black, Castle, PawnDirection, Side, White},
@@ -19,9 +19,9 @@ impl AI {
         board: &mut Board,
     ) -> Option<Move> {
         let mut best_mv: Option<Move> = None;
-        let mut max = -30000;
+        let mut max = -31000;
         let mut move_list = MoveList::default();
-        let alpha = max;
+        let alpha = max - 1000;
         let beta = -alpha;
         move_generator.generate_moves(&mut move_list, board);
         for mv in move_list.as_slice() {
@@ -32,9 +32,10 @@ impl AI {
                         -AI::nega_max::<Black>(depth - 1, move_generator, board, -beta, -alpha)
                     }
                     Color::Black => {
-                        AI::nega_max::<White>(depth - 1, move_generator, board, alpha, beta)
+                        -AI::nega_max::<White>(depth - 1, move_generator, board, -beta, -alpha)
                     }
                 };
+                //println!("{mv}: {score}");
                 if score > max {
                     max = score;
                     best_mv = Some(*mv);
@@ -63,17 +64,19 @@ impl AI {
             if !move_generator.is_king_in_check(board, S::COLOR) {
                 let score =
                     -AI::nega_max::<S::Opposite>(depth - 1, move_generator, board, -beta, -alpha);
+                if score >= beta {
+                    undo_move::<S>(*mv, board, undo);
+                    return score;
+                }
                 if score > max {
                     max = score;
-                    if score > alpha {
-                        alpha = score;
-                    }
                 }
-                legal_moves += 1;
-                if beta <= alpha {
+                alpha = i16::max(alpha, score);
+                if alpha >= beta {
                     undo_move::<S>(*mv, board, undo);
                     break;
                 }
+                legal_moves += 1;
             }
             undo_move::<S>(*mv, board, undo);
         }
@@ -87,10 +90,11 @@ impl AI {
 }
 mod tests {
     use crate::{
-        board::{Board, Color},
+        board::bitboard::Square,
+        board::board::{Board, Color},
         engine::make_move,
         moves::{
-            move_generator::{MoveGenerator, MoveType},
+            move_generator::{Move, MoveGenerator, MoveType},
             traits::{Black, White},
         },
     };
@@ -107,6 +111,26 @@ mod tests {
         board.side_to_move = board.side_to_move ^ 1;
         println!("{}", move_made.unwrap());
         println!("{}", board);
+        assert!(false)
+    }
+    #[test]
+    fn nega_max_mate_test() {
+        let mut board = Board::from_FEN(
+            "r1bq2r1/b4pk1/p1pp1p2/1p2pP2/1P2P1PB/3P4/1PPQ2P1/R3K2R w KQ - 0 1".to_string(),
+        );
+        println! {"{}", board};
+        let mvg = MoveGenerator::default();
+        let move_made = AI::make_decision(4, &mvg, &mut board);
+        println!("{}", move_made.unwrap());
+        make_move::<White>(&mut board, move_made.unwrap());
+        board.side_to_move = board.side_to_move ^ 1;
+        let move_made = AI::make_decision(4, &mvg, &mut board);
+        println!("{}", move_made.unwrap());
+        make_move::<Black>(&mut board, move_made.unwrap());
+        board.side_to_move = board.side_to_move ^ 1;
+        let move_made = AI::make_decision(4, &mvg, &mut board);
+        println!("{}", move_made.unwrap());
+        println! {"{}", board};
         assert!(false)
     }
 }
