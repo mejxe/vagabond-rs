@@ -25,8 +25,8 @@ pub struct Undo {
 }
 #[derive(Debug, Copy, Clone)]
 pub struct MoveList {
-    moves: [ExtMove; 256],
-    count: usize,
+    pub moves: [ExtMove; 256],
+    pub count: usize,
 }
 impl Default for MoveList {
     fn default() -> Self {
@@ -59,11 +59,20 @@ impl MoveList {
             mv.score_move(board, ply, killers);
         }
     }
+    pub fn score_captures(&mut self, board: &Board) {
+        for mv in self.moves[..self.count].iter_mut() {
+            mv.score_capture(board);
+        }
+    }
     pub fn move_fetcher(&mut self) -> MoveFetcher<'_> {
         MoveFetcher {
             moves: &mut self.moves[..self.count],
             current: 0,
         }
+    }
+
+    pub fn count(&self) -> usize {
+        self.count
     }
 }
 pub struct MoveFetcher<'a> {
@@ -77,22 +86,29 @@ impl<'a> Iterator for MoveFetcher<'a> {
         if self.current >= self.moves.len() {
             return None;
         }
-        if self.moves[self.current].score == 0 {
+        if self.current > 0 && self.moves[self.current - 1].score == 0 {
             let mv = self.moves[self.current];
             self.current += 1;
             return Some(mv);
         }
+
         let mut max_index = self.current;
         let mut max_val = self.moves[self.current].score;
-        for i in self.current + 1..self.moves.len() {
+
+        for i in (self.current + 1)..self.moves.len() {
             if self.moves[i].score > max_val {
                 max_index = i;
                 max_val = self.moves[i].score;
             }
         }
+
         self.moves.swap(max_index, self.current);
+
+        let best_move = self.moves[self.current];
+
         self.current += 1;
-        Some(self.moves[max_index])
+
+        Some(best_move)
     }
 }
 pub struct MoveGenerator {
@@ -438,6 +454,7 @@ impl MoveGenerator {
             }
         }
     }
+    #[inline(always)]
     pub fn is_king_in_check(&self, board: &Board, color: Color) -> bool {
         let king = Square::from_u8_unchecked(
             board.pieces[color][PieceType::King].0.trailing_zeros() as u8,

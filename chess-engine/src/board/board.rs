@@ -253,13 +253,11 @@ impl Board {
         let mut game_phase = 0;
         for (i, possible_piece) in mailbox.into_iter().enumerate() {
             if let Some(piece) = possible_piece {
-                println!("{}", Square::from_u8_unchecked(i as u8));
                 let eval = PestoEvaluation::get_mg_score(Square::from_u8_unchecked(i as u8), piece);
                 let eval = match piece.color {
                     Color::White => eval,
                     Color::Black => -eval,
                 };
-                println!("{}", eval);
                 mg_scores[piece.color as usize] +=
                     PestoEvaluation::get_mg_score(Square::from_u8_unchecked(i as u8), piece);
                 eg_scores[piece.color as usize] +=
@@ -267,8 +265,6 @@ impl Board {
                 game_phase += PestoEvaluation::PIECE_PHASE_INCR[piece.piece_type as usize];
             }
         }
-        dbg!(mg_scores[0] - mg_scores[1]);
-        dbg!(eg_scores[0] - eg_scores[1]);
         (
             mg_scores[0] - mg_scores[1],
             eg_scores[0] - eg_scores[1],
@@ -276,8 +272,9 @@ impl Board {
         )
     }
     pub fn evaluate(&self) -> i16 {
-        let mg = self.mg_score as i32 * self.phase as i32;
-        let eg = self.eg_score as i32 * (24 - self.phase as i32);
+        let clamped = self.phase.min(24);
+        let mg = self.mg_score as i32 * clamped as i32;
+        let eg = self.eg_score as i32 * (24 - clamped as i32);
         ((mg + eg) / 24) as i16
     }
     pub fn add_score<S: Evaluation>(&mut self, square: Square, piece: Piece) {
@@ -450,5 +447,13 @@ mod debug_tests {
         println!("{}", b.get_pieces(PieceType::Bishop, Color::White));
         println!("{b}");
         assert!(false)
+    }
+    #[test]
+    fn evaluate_position_test() {
+        let b = Board::from_FEN(
+            "r3k2r/p2pqpb1/bnpPpnp1/4N3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 2".to_string(),
+        );
+        println!("{}", b.evaluate());
+        assert!(false);
     }
 }

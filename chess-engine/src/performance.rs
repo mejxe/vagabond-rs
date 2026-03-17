@@ -1,4 +1,7 @@
-use std::ops::{Add, AddAssign};
+use std::{
+    ops::{Add, AddAssign},
+    time::Instant,
+};
 
 use crate::{
     ai::evaluation::Evaluation,
@@ -7,6 +10,7 @@ use crate::{
         board::{Board, Color, PieceType},
     },
     engine::{make_move, undo_move},
+    format_with_commas,
     moves::{
         move_generator::{MoveGenerator, MoveList},
         move_structs::MoveType,
@@ -16,10 +20,20 @@ use crate::{
 
 pub fn perft_entry(board: &mut Board, depth: u32) -> u64 {
     let move_generator = MoveGenerator::default();
-    match board.side_to_move {
+    let time = Instant::now();
+    let sum = match board.side_to_move {
         Color::White => perft::<White>(&move_generator, board, depth),
         Color::Black => perft::<Black>(&move_generator, board, depth),
-    }
+    };
+    let duration = time.elapsed();
+    println!("-----------------------");
+    println!("Total nodes: {}", format_with_commas(sum.into()));
+    println!("Took: {:?}", duration.as_secs_f64());
+    println!(
+        "Nodes Per Second: {} nps",
+        format_with_commas((sum as f64 / duration.as_secs_f64()).floor() as u64)
+    );
+    sum
 }
 pub fn perft_divide<S: Side + Castle + Evaluation + PawnDirection>(
     board: &mut Board,
@@ -35,25 +49,18 @@ pub fn perft_divide<S: Side + Castle + Evaluation + PawnDirection>(
     for mv in move_list.as_slice() {
         let undo = make_move::<S>(board, mv.mv);
 
-        let king_bits = board.get_pieces(PieceType::King, S::COLOR).0;
+        if !move_generator.is_king_in_check(board, S::COLOR) {
+            let nodes = perft::<S::Opposite>(&move_generator, board, depth - 1);
 
-        if king_bits != 0 {
-            let king_square = Square::from_u8_unchecked(king_bits.trailing_zeros() as u8);
+            println!("{}: {}", mv, format_with_commas(total_nodes.into()));
 
-            if !move_generator.is_square_attacked::<S>(board, king_square) {
-                let nodes = perft::<S::Opposite>(&move_generator, board, depth - 1);
-
-                println!("{}: {}", mv, nodes);
-
-                total_nodes += nodes;
-            }
+            total_nodes += nodes;
         }
-
         undo_move::<S>(mv.mv, board, undo);
     }
 
     println!("-----------------------");
-    println!("Total nodes: {}", total_nodes);
+    println!("Total nodes: {}", format_with_commas(total_nodes.into()));
     total_nodes
 }
 pub fn perft<S: Side + Castle + Evaluation>(
@@ -73,14 +80,7 @@ pub fn perft<S: Side + Castle + Evaluation>(
         let undo = make_move::<S>(board, mv.mv);
         //println!("board: {}", board);
 
-        let king_square = Square::from_u8_unchecked(
-            board
-                .get_pieces(PieceType::King, S::COLOR)
-                .0
-                .trailing_zeros() as u8,
-        );
-        if !move_generator.is_square_attacked::<S>(board, king_square) {
-            // TODO: fix that returning true always
+        if !move_generator.is_king_in_check(board, S::COLOR) {
             //      println!("{}", board.get_piece_at_square(mv.to()).unwrap());
             //      println!("move: {}, {nodes}", mv);
             let new_nodes = perft::<S::Opposite>(move_generator, board, depth - 1);
@@ -138,7 +138,7 @@ pub fn perft_by_move_type<S: Side + Castle + Evaluation>(
 
     let mut move_list = MoveList::default();
     move_generator.generate_moves_generic::<S>(&mut move_list, board);
-    let moves = move_list.as_slice();
+    let moves = move_list.move_fetcher();
     for mv in moves {
         let undo = make_move::<S>(board, mv.mv);
         //println!("board: {}", board);
@@ -150,9 +150,6 @@ pub fn perft_by_move_type<S: Side + Castle + Evaluation>(
                 .trailing_zeros() as u8,
         );
         if !move_generator.is_square_attacked::<S>(board, king_square) {
-            // TODO: fix that returning true always
-            //      println!("{}", board.get_piece_at_square(mv.to()).unwrap());
-            //      println!("move: {}, {nodes}", mv);
             let new_moves = perft_by_move_type::<S::Opposite>(
                 move_generator,
                 board,
@@ -171,6 +168,7 @@ pub fn perft_divide_by_move_type<S: Side + Castle + Evaluation + PawnDirection>(
     board: &mut Board,
     depth: u32,
 ) -> PerftMoves {
+    let time = Instant::now();
     let move_generator = MoveGenerator::default();
     println!("--- Perft Divide Depth {} ---", depth);
     let mut total_nodes = PerftMoves {
@@ -209,8 +207,14 @@ pub fn perft_divide_by_move_type<S: Side + Castle + Evaluation + PawnDirection>(
     }
 
     let sum = total_nodes.captures + total_nodes.castles + total_nodes.quiets;
+    let duration = time.elapsed();
     println!("-----------------------");
     println!("Total nodes: {:?}", total_nodes);
-    println!("Total nodes: {sum}");
+    println!("Total nodes: {}", format_with_commas(sum.into()));
+    println!("Took: {:?}", duration.as_secs_f64());
+    println!(
+        "Nodes Per Second: {} nps",
+        format_with_commas((sum as f64 / duration.as_secs_f64()).floor() as u64)
+    );
     total_nodes
 }

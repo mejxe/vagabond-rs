@@ -1,12 +1,13 @@
-use std::f32::MIN;
+use std::{f32::MIN, i16};
 
 use crate::{
     ai::evaluation::Evaluation,
     board::{
         bitboard::Square,
-        board::{Board, Color},
+        board::{Board, Color, Piece, PieceType},
     },
     engine::{make_move, make_move_non_generic, undo_move, undo_move_non_generic},
+    format_with_commas,
     moves::{
         move_generator::{MoveGenerator, MoveList},
         move_structs::{ExtMove, Move},
@@ -14,7 +15,9 @@ use crate::{
     },
 };
 
-pub struct AI {}
+use super::evaluation::PestoEvaluation;
+
+pub struct AI;
 impl AI {
     pub fn make_decision(
         depth: u8,
@@ -26,7 +29,7 @@ impl AI {
         let mut best_mv: Option<Move> = None;
         let mut max = -31000;
         let mut move_list = MoveList::default();
-        let mut alpha = max - 1000;
+        let mut alpha = max;
         let beta = -alpha;
         move_generator.generate_moves(&mut move_list, board);
         move_list.score_moves(board, 0, &killer_moves);
@@ -65,7 +68,12 @@ impl AI {
             }
             undo_move_non_generic(board, mv.mv, undo, board.side_to_move);
         }
-        println!("nodes searched: {nodes_searched}");
+        let branching_factor = (nodes_searched as f64).powf(1.0 / depth as f64);
+        println!(
+            "nodes searched: {}\nBranching factor: {}",
+            format_with_commas(nodes_searched.into()),
+            branching_factor
+        );
         return best_mv;
     }
     fn nega_max<S: Side + Castle + PawnDirection + Evaluation>(
@@ -79,9 +87,10 @@ impl AI {
         max_depth: u8,
     ) -> i16 {
         if depth == 0 {
-            return board.evaluate() * S::MULTIPLIER;
+            return AI::quiescence_search::<S>(move_generator, board, alpha, beta, nodes_searched);
+            //return board.evaluate() * S::MULTIPLIER;
         }
-        let mut max = i16::MIN;
+        let mut best_score = i16::MIN;
         let ply = max_depth - depth;
 
         let mut move_list = MoveList::default();
@@ -105,11 +114,11 @@ impl AI {
                     killer_moves,
                     max_depth,
                 );
-
-                if score > max {
-                    max = score;
+                if score > best_score {
+                    best_score = score;
                 }
-                if max >= beta {
+
+                if score >= beta {
                     if !mv.mv.move_type().is_capture() {
                         if killer_moves[ply as usize][0] != Some(mv.mv) {
                             killer_moves[ply as usize][1] = killer_moves[ply as usize][0];
@@ -117,21 +126,83 @@ impl AI {
                         }
                     }
                     undo_move::<S>(mv.mv, board, undo);
-                    return max;
+                    return best_score;
                 }
-                alpha = i16::max(alpha, max);
+                if best_score > alpha {
+                    alpha = best_score;
+                }
             }
             undo_move::<S>(mv.mv, board, undo);
         }
         if legal_moves == 0 && move_generator.is_king_in_check(board, S::COLOR) {
-            return -30000 + depth as i16;
+            return -30000 + ply as i16;
         } else if legal_moves == 0 {
             return 0;
         }
-        return max;
+        return best_score;
     }
-    fn quiescence_search() {
-        todo!();
+    fn quiescence_search<S: Side + Castle + PawnDirection + Evaluation>(
+        move_generator: &MoveGenerator,
+        board: &mut Board,
+        mut alpha: i16,
+        beta: i16,
+        nodes_searched: &mut u32,
+    ) -> i16 {
+        let static_score = board.evaluate() * S::MULTIPLIER;
+
+        if static_score >= beta {
+            return static_score;
+        }
+        if alpha < static_score {
+            alpha = static_score;
+        }
+        let mut best_score = static_score;
+        let mut move_list = MoveList::default();
+        move_generator.generate_captures::<S>(&mut move_list, board);
+        move_list.score_captures(board);
+
+        let moves = move_list.move_fetcher();
+        for mv in moves {
+            let victim_piece = board
+                .get_piece_at_square(mv.mv.to())
+                .unwrap_or_else(|| Piece {
+                    piece_type: PieceType::Pawn,
+                    color: Color::White,
+                })
+                .piece_type;
+            let victim_value = PestoEvaluation::EG_MATERIAL_VAL[victim_piece as usize];
+
+            // delta pruning
+            let safety_margin = 200;
+            if static_score + victim_value + safety_margin < alpha {
+                continue;
+            }
+
+            *nodes_searched += 1;
+            let undo = make_move::<S>(board, mv.mv);
+            if !move_generator.is_king_in_check(board, S::COLOR) {
+                let score = -AI::quiescence_search::<S::Opposite>(
+                    move_generator,
+                    board,
+                    -beta,
+                    -alpha,
+                    nodes_searched,
+                );
+                if score > best_score {
+                    best_score = score;
+                }
+
+                if score >= beta {
+                    undo_move::<S>(mv.mv, board, undo);
+                    return score;
+                }
+                if best_score > alpha {
+                    alpha = best_score;
+                }
+            }
+            undo_move::<S>(mv.mv, board, undo);
+        }
+        return best_score;
     }
 }
 mod tests {

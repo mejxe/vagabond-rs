@@ -6,7 +6,7 @@ use crate::{
     board::board::Color,
 };
 
-use super::move_structs::ExtMove;
+use super::move_structs::{ExtMove, Move};
 
 pub trait Castle {
     const KING_SIDE: BitBoard;
@@ -132,5 +132,16 @@ impl Side for Black {
 impl Display for ExtMove {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} | score: {}", self.mv, self.score)
+    }
+}
+impl Display for Move {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} to {}, {:?}",
+            self.from(),
+            self.to(),
+            self.move_type()
+        )
     }
 }

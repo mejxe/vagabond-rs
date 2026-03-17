@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::board::{
     bitboard::Square,
-    board::{Board, PieceType},
+    board::{Board, Color, Piece, PieceType},
 };
 
 #[repr(transparent)]
@@ -41,17 +41,6 @@ pub enum Promotion {
     ToKnight,
     ToRook,
     ToQueen,
-}
-impl Display for Move {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} to {}, {:?}",
-            self.from(),
-            self.to(),
-            self.move_type()
-        )
-    }
 }
 #[repr(u8)]
 #[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Copy, Clone)]
@@ -97,7 +86,6 @@ pub struct ExtMove {
     pub score: u16,
 }
 impl ExtMove {
-    // for scoring capture moves only
     pub fn score_move(&mut self, board: &Board, ply: u8, killers: &[[Option<Move>; 2]; 64]) {
         let move_type = self.mv.move_type();
         if move_type.is_capture() {
@@ -123,14 +111,33 @@ impl ExtMove {
             }
         }
     }
+    pub fn score_capture(&mut self, board: &Board) {
+        let move_type = self.mv.move_type();
+        if move_type.is_capture() {
+            let aggressor = board
+                .get_piece_at_square(self.mv.from())
+                .unwrap()
+                .piece_type;
+
+            let victim = board
+                .get_piece_at_square(self.mv.to())
+                .unwrap_or_else(|| Piece {
+                    piece_type: PieceType::Pawn,
+                    color: Color::White,
+                })
+                .piece_type;
+
+            self.score = MVV_LVA_TABLE[victim as usize][aggressor as usize] + 100;
+        }
+    }
 }
 
 // TODO: Test if no branching with None variant is better
 pub const MVV_LVA_TABLE: [[u16; 6]; 6] = [
-    [0, 0, 0, 0, 0, 0],       // victim K, attacker K, Q, R, B, N, P
-    [50, 51, 52, 53, 54, 55], // victim Q, attacker K, Q, R, B, N, P
-    [40, 41, 42, 43, 44, 45], // victim R, attacker K, Q, R, B, N, P
     [30, 31, 32, 33, 34, 35], // victim B, attacker K, Q, R, B, N, P
+    [0, 0, 0, 0, 0, 0],       // victim K, attacker K, Q, R, B, N, P
     [20, 21, 22, 23, 24, 25], // victim N, attacker K, Q, R, B, N, P
     [10, 11, 12, 13, 14, 15], // victim P, attacker K, Q, R, B, N, P
+    [40, 41, 42, 43, 44, 45], // victim R, attacker K, Q, R, B, N, P
+    [50, 51, 52, 53, 54, 55], // victim Q, attacker K, Q, R, B, N, P
 ];

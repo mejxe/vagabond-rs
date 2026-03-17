@@ -90,7 +90,7 @@ impl PestoEvaluation {
                     + Self::MG_MATERIAL_VAL[piece.piece_type as usize]
             }
             Color::Black => {
-                Self::MG_TABLE[piece.piece_type as usize][(square as usize)]
+                Self::MG_TABLE[piece.piece_type as usize][square as usize]
                     + Self::MG_MATERIAL_VAL[piece.piece_type as usize]
             }
         }
@@ -103,27 +103,27 @@ impl PestoEvaluation {
                     + Self::EG_MATERIAL_VAL[piece.piece_type as usize]
             }
             Color::Black => {
-                Self::EG_TABLE[piece.piece_type as usize][(square as usize)]
+                Self::EG_TABLE[piece.piece_type as usize][square as usize]
                     + Self::EG_MATERIAL_VAL[piece.piece_type as usize]
             }
         }
     }
     const MG_TABLE: [[i16; 64]; 6] = [
-        mg_pawn_table,
-        mg_knight_table,
         mg_bishop_table,
+        mg_king_table,
+        mg_knight_table,
+        mg_pawn_table,
         mg_rook_table,
         mg_queen_table,
-        mg_king_table,
     ];
 
     const EG_TABLE: [[i16; 64]; 6] = [
-        eg_pawn_table,
-        eg_knight_table,
         eg_bishop_table,
+        eg_king_table,
+        eg_knight_table,
+        eg_pawn_table,
         eg_rook_table,
         eg_queen_table,
-        eg_king_table,
     ];
     pub const PIECE_PHASE_INCR: [i16; 6] = [1, 0, 1, 0, 2, 4]; // bishop, king, knight, pawn, rook, queen
     pub const MG_MATERIAL_VAL: [i16; 6] = [365, 0, 337, 82, 477, 1025];
