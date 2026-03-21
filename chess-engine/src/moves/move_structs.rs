@@ -6,7 +6,7 @@ use crate::board::{
 };
 
 #[repr(transparent)]
-#[derive(Debug, PartialEq, PartialOrd, Ord, Eq, Copy, Clone)]
+#[derive(PartialEq, PartialOrd, Ord, Eq, Copy, Clone)]
 pub struct Move(pub u16);
 impl Move {
     pub fn new(from: Square, to: Square, move_type: MoveType) -> Self {

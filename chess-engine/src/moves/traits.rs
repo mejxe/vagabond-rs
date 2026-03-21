@@ -1,9 +1,11 @@
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
 use crate::{
     ai::evaluation::Evaluation,
-    board::bitboard::{BitBoard, Square},
-    board::board::Color,
+    board::{
+        bitboard::{BitBoard, Square},
+        board::{Color, PieceType},
+    },
 };
 
 use super::move_structs::{ExtMove, Move};
@@ -131,10 +133,11 @@ impl Side for Black {
 
 impl Display for ExtMove {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} | score: {}", self.mv, self.score)
+        write!(f, "{:?} | score: {}", self.mv, self.score)
     }
 }
-impl Display for Move {
+
+impl Debug for Move {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -143,5 +146,18 @@ impl Display for Move {
             self.to(),
             self.move_type()
         )
+    }
+}
+impl Display for Move {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let promotion = match self.promotion_to() {
+            Some(PieceType::Queen) => "q",
+            Some(PieceType::Rook) => "r",
+            Some(PieceType::Bishop) => "b",
+            Some(PieceType::Knight) => "n",
+            _ => "",
+        };
+        let s = format!("{}{}{}", self.from(), self.to(), promotion);
+        write!(f, "{}", s)
     }
 }

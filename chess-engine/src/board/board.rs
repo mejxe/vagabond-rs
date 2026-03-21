@@ -170,8 +170,12 @@ impl Board {
         BitBoard(self.black_occupied().0 | self.white_occupied().0)
     }
 
+    #[inline(always)]
     pub fn set_en_passant_square(&mut self, en_passant_square: Option<Square>) {
         self.en_passant_square = en_passant_square;
+    }
+    pub fn swap_side(&mut self) {
+        self.side_to_move ^= 1;
     }
     pub fn from_mailbox(
         mailbox: [Option<Piece>; 64],
@@ -309,7 +313,7 @@ fn c_to_piece(c: char) -> Option<Piece> {
     };
     Some(Piece { piece_type, color })
 }
-fn chess_notation_to_sq(notation: &str) -> Option<Square> {
+pub fn chess_notation_to_sq(notation: &str) -> Option<Square> {
     let chars: Vec<_> = notation.chars().collect();
     if chars[0] == '-' {
         return None;

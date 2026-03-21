@@ -111,6 +111,7 @@ impl<'a> Iterator for MoveFetcher<'a> {
         Some(best_move)
     }
 }
+#[derive(Clone)]
 pub struct MoveGenerator {
     rook_atk: Vec<BitBoard>,
     bishop_atk: Vec<BitBoard>,

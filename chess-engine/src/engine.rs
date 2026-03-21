@@ -1,3 +1,5 @@
+use std::sync::{Arc, atomic::AtomicBool};
+
 use crate::{
     ai::{
         ai::AI,
@@ -14,25 +16,56 @@ use crate::{
         sliders::CASTLING_MASK,
         traits::{Black, Castle, PawnDirection, Side, White},
     },
+    uci::handler::StopFlag,
 };
 
+#[derive(Clone)]
 pub struct Engine {
     board: Board,
     move_gen: MoveGenerator,
     ai: AI,
+    depth: u8,
 }
 impl Default for Engine {
     fn default() -> Self {
         Self {
             board: Board::default(),
             move_gen: MoveGenerator::default(),
-            ai: AI {},
+            ai: AI,
+            depth: 5,
         }
     }
 }
+impl Engine {
+    pub fn set_board(&mut self, board: Board) {
+        self.board = board;
+    }
+    pub fn play(&mut self) -> Option<Move> {
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let move_made =
+            AI::make_decision(self.depth, &mut self.move_gen, &mut self.board, stop_flag);
+        if let Some(mv) = move_made {
+            make_move_non_generic(&mut self.board, mv);
+        }
+        self.board.swap_side();
+        move_made
+    }
+    pub fn go(&mut self, depth: u8, stop: StopFlag) -> Option<Move> {
+        self.set_depth(depth);
+        AI::make_decision(self.depth, &mut self.move_gen, &mut self.board, stop)
+    }
 
-pub fn make_move_non_generic(board: &mut Board, mv: Move, color: Color) -> Undo {
-    match color {
+    pub fn set_depth(&mut self, depth: u8) {
+        self.depth = depth;
+    }
+
+    pub fn board(&self) -> Board {
+        self.board
+    }
+}
+
+pub fn make_move_non_generic(board: &mut Board, mv: Move) -> Undo {
+    match board.side_to_move {
         Color::White => make_move::<White>(board, mv),
         Color::Black => make_move::<Black>(board, mv),
     }

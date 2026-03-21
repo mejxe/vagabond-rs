@@ -1,4 +1,4 @@
-use std::{f32::MIN, i16};
+use std::{f32::MIN, i16, sync::atomic::Ordering};
 
 use crate::{
     ai::evaluation::Evaluation,
@@ -13,17 +13,21 @@ use crate::{
         move_structs::{ExtMove, Move},
         traits::{Black, Castle, PawnDirection, Side, White},
     },
+    uci::handler::StopFlag,
 };
 
 use super::evaluation::PestoEvaluation;
 
+#[derive(Clone)]
 pub struct AI;
 impl AI {
     pub fn make_decision(
         depth: u8,
         move_generator: &MoveGenerator,
         board: &mut Board,
+        stop: StopFlag,
     ) -> Option<Move> {
+        let mut aborted = false;
         let mut nodes_searched = 0;
         let mut killer_moves: [[Option<Move>; 2]; 64] = [[None; 2]; 64];
         let mut best_mv: Option<Move> = None;
@@ -35,7 +39,10 @@ impl AI {
         move_list.score_moves(board, 0, &killer_moves);
         let moves = move_list.move_fetcher();
         for mv in moves {
-            let undo = make_move_non_generic(board, mv.mv, board.side_to_move);
+            if stop.load(Ordering::Relaxed) {
+                break;
+            };
+            let undo = make_move_non_generic(board, mv.mv);
             if !move_generator.is_king_in_check(board, board.side_to_move) {
                 let score = match board.side_to_move {
                     Color::White => -AI::nega_max::<Black>(
@@ -47,6 +54,8 @@ impl AI {
                         &mut nodes_searched,
                         &mut killer_moves,
                         depth,
+                        &stop,
+                        &mut aborted,
                     ),
                     Color::Black => -AI::nega_max::<White>(
                         depth - 1,
@@ -57,6 +66,8 @@ impl AI {
                         &mut nodes_searched,
                         &mut killer_moves,
                         depth,
+                        &stop,
+                        &mut aborted,
                     ),
                 };
 
@@ -68,12 +79,8 @@ impl AI {
             }
             undo_move_non_generic(board, mv.mv, undo, board.side_to_move);
         }
-        let branching_factor = (nodes_searched as f64).powf(1.0 / depth as f64);
-        println!(
-            "nodes searched: {}\nBranching factor: {}",
-            format_with_commas(nodes_searched.into()),
-            branching_factor
-        );
+        //let branching_factor = (nodes_searched as f64).powf(1.0 / depth as f64);
+        //println!("info depth {} nodes {}", depth, nodes_searched);
         return best_mv;
     }
     fn nega_max<S: Side + Castle + PawnDirection + Evaluation>(
@@ -85,9 +92,26 @@ impl AI {
         nodes_searched: &mut u32,
         killer_moves: &mut [[Option<Move>; 2]; 64],
         max_depth: u8,
+        stop: &StopFlag,
+        aborted: &mut bool,
     ) -> i16 {
+        if *aborted {
+            return 0;
+        }
+        if *nodes_searched % 2048 == 0 && stop.load(Ordering::Relaxed) {
+            *aborted = true;
+            return 0;
+        }
         if depth == 0 {
-            return AI::quiescence_search::<S>(move_generator, board, alpha, beta, nodes_searched);
+            return AI::quiescence_search::<S>(
+                move_generator,
+                board,
+                alpha,
+                beta,
+                nodes_searched,
+                stop,
+                aborted,
+            );
             //return board.evaluate() * S::MULTIPLIER;
         }
         let mut best_score = i16::MIN;
@@ -113,6 +137,8 @@ impl AI {
                     nodes_searched,
                     killer_moves,
                     max_depth,
+                    stop,
+                    aborted,
                 );
                 if score > best_score {
                     best_score = score;
@@ -147,8 +173,17 @@ impl AI {
         mut alpha: i16,
         beta: i16,
         nodes_searched: &mut u32,
+        stop: &StopFlag,
+        aborted: &mut bool,
     ) -> i16 {
+        if *aborted {
+            return 0;
+        }
         let static_score = board.evaluate() * S::MULTIPLIER;
+        if *nodes_searched % 2048 == 0 && stop.load(Ordering::Relaxed) {
+            *aborted = true;
+            return static_score;
+        }
 
         if static_score >= beta {
             return static_score;
@@ -187,6 +222,8 @@ impl AI {
                     -beta,
                     -alpha,
                     nodes_searched,
+                    stop,
+                    aborted,
                 );
                 if score > best_score {
                     best_score = score;
@@ -194,7 +231,7 @@ impl AI {
 
                 if score >= beta {
                     undo_move::<S>(mv.mv, board, undo);
-                    return score;
+                    return beta;
                 }
                 if best_score > alpha {
                     alpha = best_score;
@@ -206,6 +243,8 @@ impl AI {
     }
 }
 mod tests {
+    use std::sync::{Arc, atomic::AtomicBool};
+
     use crate::{
         board::bitboard::Square,
         board::board::{Board, Color},
@@ -225,33 +264,35 @@ mod tests {
             "r1bq2r1/b4pk1/p1pp1p2/1p2pP2/1P2P1PB/3P4/1PPQ2P1/R3K2R w KQ - 0 1".to_string(),
         );
         let mvg = MoveGenerator::default();
-        let move_made = AI::make_decision(2, &mvg, &mut board);
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let move_made = AI::make_decision(2, &mvg, &mut board, stop_flag);
         make_move::<White>(&mut board, move_made.unwrap());
         board.side_to_move = board.side_to_move ^ 1;
-        println!("{}", move_made.unwrap());
+        println!("{:?}", move_made.unwrap());
         println!("{}", board);
         assert!(false)
     }
     #[test]
     fn nega_max_mate_test() {
+        let stop_flag = Arc::new(AtomicBool::new(false));
         let mut board = Board::from_FEN(
             "r1bq2r1/b4pk1/p1pp1p2/1p2pP2/1P2P1PB/3P4/1PPQ2P1/R3K2R w KQ - 0 1".to_string(),
         );
         println! {"{}", board};
         let mvg = MoveGenerator::default();
-        let move_made = AI::make_decision(4, &mvg, &mut board);
-        println!("{}", move_made.unwrap());
+        let move_made = AI::make_decision(4, &mvg, &mut board, stop_flag.clone());
+        println!("{:?}", move_made.unwrap());
         make_move::<White>(&mut board, move_made.unwrap());
         println! {"{}", board};
         board.side_to_move = board.side_to_move ^ 1;
-        let move_made = AI::make_decision(4, &mvg, &mut board);
-        println!("{}", move_made.unwrap());
+        let move_made = AI::make_decision(4, &mvg, &mut board, stop_flag.clone());
+        println!("{:?}", move_made.unwrap());
         make_move::<Black>(&mut board, move_made.unwrap());
         println! {"{}", board};
         board.side_to_move = board.side_to_move ^ 1;
-        let move_made = AI::make_decision(4, &mvg, &mut board);
+        let move_made = AI::make_decision(4, &mvg, &mut board, stop_flag.clone());
         make_move::<White>(&mut board, move_made.unwrap());
-        println!("{}", move_made.unwrap());
+        println!("{:?}", move_made.unwrap());
         println! {"{}", board};
         assert!(false)
     }

@@ -1,6 +1,6 @@
 use std::{
     fmt::Display,
-    ops::{BitXor, Index},
+    ops::{BitXor, BitXorAssign, Index},
 };
 
 use super::{
@@ -76,6 +76,11 @@ impl BitXor<u8> for Color {
     type Output = Color;
     fn bitxor(self, rhs: u8) -> Self::Output {
         Color::from_u8_unchecked(self as u8 ^ rhs)
+    }
+}
+impl BitXorAssign<u8> for Color {
+    fn bitxor_assign(&mut self, rhs: u8) {
+        *self = *self ^ rhs
     }
 }
 impl Color {
