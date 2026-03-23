@@ -1,6 +1,9 @@
 use std::fmt::Display;
 
-use crate::{board::board::Board, moves::move_structs::Move};
+use crate::{
+    board::{bitboard::Square, board::Board},
+    moves::move_structs::{Move, MoveType},
+};
 
 #[derive(Debug, PartialEq)]
 pub enum UciIn {
@@ -8,7 +11,7 @@ pub enum UciIn {
     IsReady,
     Position(Board),
     GoDepth(u8),
-    GoTime(u128),
+    GoTime(GoTimeParams),
     Stop,
     Board,
     Exit,
@@ -19,7 +22,35 @@ pub enum UciOut {
     ReadyOk,
     BestMove(Move),
     Board(Board),
-    Info,
+    Info(InfoParams),
+}
+#[derive(Debug, PartialEq)]
+pub struct InfoParams {
+    pub curr_depth: u8,
+    pub best_mv: Option<Move>,
+    pub nodes_searched: u32,
+}
+#[derive(Debug, PartialEq)]
+pub struct GoTimeParams {
+    // all in miliseconds
+    pub wtime: u128,
+    pub btime: u128,
+    pub winc: u128,
+    pub binc: u128,
+}
+impl Display for InfoParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let pv = if let Some(mv) = self.best_mv {
+            mv
+        } else {
+            Move::new(Square::A1, Square::A1, MoveType::Quiet)
+        };
+        let msg = format!(
+            "depth {} nodes {} pv {}",
+            self.curr_depth, self.nodes_searched, pv
+        );
+        write!(f, "{}", msg)
+    }
 }
 
 #[derive(Debug, PartialEq)]

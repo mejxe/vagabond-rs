@@ -9,7 +9,7 @@ use crate::{
     },
 };
 
-use super::structs::UciIn;
+use super::structs::{GoTimeParams, UciIn};
 
 #[derive(Debug)]
 pub struct Parser;
@@ -30,17 +30,37 @@ impl Parser {
         }
     }
     fn parse_go(words: Vec<&str>) -> Option<UciIn> {
-        let go_type = words.get(0).copied();
-        match go_type {
-            Some("depth") => {
-                let depth = words[1].parse::<u8>();
-                if let Ok(depth) = depth {
+        let (mut wtime, mut winc, mut btime, mut binc) = (0, 0, 0, 0);
+        for (i, word) in words.iter().enumerate() {
+            match *word {
+                "depth" => {
+                    let depth = words[i + 1].parse::<u8>().ok()?;
                     return Some(UciIn::GoDepth(depth));
-                } else {
-                    return None;
                 }
+                "wtime" => {
+                    wtime = words[i + 1].parse::<u128>().ok()?;
+                }
+                "btime" => {
+                    btime = words[i + 1].parse::<u128>().ok()?;
+                }
+                "winc" => {
+                    winc = words[i + 1].parse::<u128>().ok()?;
+                }
+                "binc" => {
+                    binc = words[i + 1].parse::<u128>().ok()?;
+                }
+                _ => {}
             }
-            _ => None,
+        }
+        if wtime != 0 && btime != 0 {
+            Some(UciIn::GoTime(GoTimeParams {
+                wtime,
+                winc,
+                btime,
+                binc,
+            }))
+        } else {
+            None
         }
     }
     fn parse_position(words: Vec<&str>) -> Option<UciIn> {

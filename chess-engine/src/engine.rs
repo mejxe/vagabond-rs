@@ -1,8 +1,11 @@
-use std::sync::{Arc, atomic::AtomicBool};
+use std::{
+    sync::{Arc, atomic::AtomicBool, mpsc::Sender},
+    time::Instant,
+};
 
 use crate::{
     ai::{
-        ai::AI,
+        ai::{AI, LimitedTime, NoLimit},
         evaluation::{Evaluation, PestoEvaluation},
     },
     board::{
@@ -16,7 +19,10 @@ use crate::{
         sliders::CASTLING_MASK,
         traits::{Black, Castle, PawnDirection, Side, White},
     },
-    uci::handler::StopFlag,
+    uci::{
+        handler::StopFlag,
+        structs::{GoTimeParams, InfoParams, UciOut},
+    },
 };
 
 #[derive(Clone)]
@@ -25,14 +31,17 @@ pub struct Engine {
     move_gen: MoveGenerator,
     ai: AI,
     depth: u8,
+    tx: Option<Sender<UciOut>>,
 }
 impl Default for Engine {
     fn default() -> Self {
+        MoveGenerator::init_slider_atk_tables();
         Self {
             board: Board::default(),
             move_gen: MoveGenerator::default(),
             ai: AI,
             depth: 5,
+            tx: None,
         }
     }
 }
@@ -40,19 +49,82 @@ impl Engine {
     pub fn set_board(&mut self, board: Board) {
         self.board = board;
     }
-    pub fn play(&mut self) -> Option<Move> {
-        let stop_flag = Arc::new(AtomicBool::new(false));
-        let move_made =
-            AI::make_decision(self.depth, &mut self.move_gen, &mut self.board, stop_flag);
-        if let Some(mv) = move_made {
-            make_move_non_generic(&mut self.board, mv);
-        }
-        self.board.swap_side();
-        move_made
+    pub fn set_tx(&mut self, tx: Sender<UciOut>) {
+        self.tx = Some(tx);
     }
-    pub fn go(&mut self, depth: u8, stop: StopFlag) -> Option<Move> {
-        self.set_depth(depth);
-        AI::make_decision(self.depth, &mut self.move_gen, &mut self.board, stop)
+    pub fn go_time(&mut self, time_data: GoTimeParams, stop: StopFlag) -> Option<Move> {
+        let my_time_left = if self.board.side_to_move == Color::White {
+            time_data.wtime
+        } else {
+            time_data.btime
+        };
+        let my_increment = if self.board.side_to_move == Color::White {
+            time_data.winc
+        } else {
+            time_data.binc
+        };
+        let mut allocated_time = (my_time_left / 20) + (my_increment / 2); //simple heuristic for the move time
+
+        if allocated_time >= my_time_left {
+            allocated_time = my_time_left - 50; // padding for delays
+        };
+        let mut current_depth = 1;
+        let mut aborted = false;
+        let mut nodes_searched = 0;
+        let mut best_move: Option<Move> = None;
+        let time_limit = LimitedTime {
+            start: Instant::now(),
+            allocated_time,
+        };
+        while !aborted {
+            best_move = AI::make_decision(
+                current_depth,
+                &mut self.move_gen,
+                &mut self.board,
+                &stop,
+                best_move,
+                &mut aborted,
+                &mut nodes_searched,
+                &time_limit,
+            );
+            if let Some(tx) = &self.tx {
+                let uci_params = InfoParams {
+                    nodes_searched,
+                    best_mv: best_move,
+                    curr_depth: current_depth,
+                };
+                tx.send(UciOut::Info(uci_params)).unwrap();
+            }
+            current_depth += 1;
+        }
+        best_move
+    }
+    pub fn go(&mut self, max_depth: u8, stop: StopFlag) -> Option<Move> {
+        let mut aborted = false;
+        let mut nodes_searched = 0;
+        let mut best_move: Option<Move> = None;
+        let time_limit = NoLimit;
+        for current_depth in 1..=max_depth {
+            best_move = AI::make_decision(
+                current_depth,
+                &mut self.move_gen,
+                &mut self.board,
+                &stop,
+                best_move,
+                &mut aborted,
+                &mut nodes_searched,
+                &time_limit,
+            );
+            if let Some(tx) = &self.tx {
+                let uci_params = InfoParams {
+                    nodes_searched,
+                    best_mv: best_move,
+                    curr_depth: current_depth,
+                };
+                tx.send(UciOut::Info(uci_params)).unwrap();
+            }
+        }
+        best_move
     }
 
     pub fn set_depth(&mut self, depth: u8) {

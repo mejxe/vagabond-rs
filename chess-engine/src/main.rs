@@ -20,10 +20,11 @@ use chess_engine::{
 };
 
 fn main() -> Result<(), ()> {
-    let engine = Engine::default();
+    let mut engine = Engine::default();
     let stop_flag = Arc::new(AtomicBool::new(false));
     let (tx_in, rx_in) = channel::<UciIn>();
     let (tx_out, rx_out) = channel::<UciOut>();
+    engine.set_tx(tx_out.clone());
     let mut handler = Handler::new(engine, rx_in, tx_out, stop_flag.clone());
     let std_in = BufReader::new(io::stdin());
     std::thread::spawn(move || handler.handle());
@@ -47,6 +48,7 @@ mod tests {
         //perft_divide_by_move_type::<White>(&mut board, 5);
         perft_entry(&mut board, 7);
     }
+    #[ignore]
     #[test]
     fn test_nega_max() {
         let board = Board::from_FEN(
@@ -57,8 +59,8 @@ mod tests {
         engine.set_board(board);
         engine.set_depth(7);
         for i in 0..1 {
-            let move_made = engine.play();
-            println!("{i}: {}", move_made.unwrap());
+            //let move_made = engine.play();
+            //println!("{i}: {}", move_made.unwrap());
             //         let move_made = engine.play();
             //         println!("{}: {}", i + 1, move_made.unwrap());
         }

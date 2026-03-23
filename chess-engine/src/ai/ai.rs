@@ -1,4 +1,4 @@
-use std::{f32::MIN, i16, sync::atomic::Ordering};
+use std::{f32::MIN, i16, sync::atomic::Ordering, time::Instant};
 
 use crate::{
     ai::evaluation::Evaluation,
@@ -21,22 +21,25 @@ use super::evaluation::PestoEvaluation;
 #[derive(Clone)]
 pub struct AI;
 impl AI {
-    pub fn make_decision(
-        depth: u8,
+    pub fn make_decision<T: TimeLimit>(
+        current_depth: u8,
         move_generator: &MoveGenerator,
         board: &mut Board,
-        stop: StopFlag,
+        stop: &StopFlag,
+        pv: Option<Move>,
+        aborted: &mut bool,
+        nodes_searched: &mut u32,
+        time_limit: &T,
     ) -> Option<Move> {
-        let mut aborted = false;
-        let mut nodes_searched = 0;
+        let mut best_mv: Option<Move> = pv;
+        // reset
         let mut killer_moves: [[Option<Move>; 2]; 64] = [[None; 2]; 64];
-        let mut best_mv: Option<Move> = None;
         let mut max = -31000;
         let mut move_list = MoveList::default();
         let mut alpha = max;
         let beta = -alpha;
         move_generator.generate_moves(&mut move_list, board);
-        move_list.score_moves(board, 0, &killer_moves);
+        move_list.score_moves(board, 0, &killer_moves, best_mv);
         let moves = move_list.move_fetcher();
         for mv in moves {
             if stop.load(Ordering::Relaxed) {
@@ -45,29 +48,31 @@ impl AI {
             let undo = make_move_non_generic(board, mv.mv);
             if !move_generator.is_king_in_check(board, board.side_to_move) {
                 let score = match board.side_to_move {
-                    Color::White => -AI::nega_max::<Black>(
-                        depth - 1,
+                    Color::White => -AI::nega_max::<Black, T>(
+                        current_depth - 1,
                         move_generator,
                         board,
                         -beta,
                         -alpha,
-                        &mut nodes_searched,
+                        nodes_searched,
                         &mut killer_moves,
-                        depth,
+                        current_depth,
                         &stop,
-                        &mut aborted,
+                        aborted,
+                        time_limit,
                     ),
-                    Color::Black => -AI::nega_max::<White>(
-                        depth - 1,
+                    Color::Black => -AI::nega_max::<White, T>(
+                        current_depth - 1,
                         move_generator,
                         board,
                         -beta,
                         -alpha,
-                        &mut nodes_searched,
+                        nodes_searched,
                         &mut killer_moves,
-                        depth,
+                        current_depth,
                         &stop,
-                        &mut aborted,
+                        aborted,
+                        time_limit,
                     ),
                 };
 
@@ -79,11 +84,9 @@ impl AI {
             }
             undo_move_non_generic(board, mv.mv, undo, board.side_to_move);
         }
-        //let branching_factor = (nodes_searched as f64).powf(1.0 / depth as f64);
-        //println!("info depth {} nodes {}", depth, nodes_searched);
         return best_mv;
     }
-    fn nega_max<S: Side + Castle + PawnDirection + Evaluation>(
+    fn nega_max<S: Side + Castle + PawnDirection + Evaluation, T: TimeLimit>(
         depth: u8,
         move_generator: &MoveGenerator,
         board: &mut Board,
@@ -94,16 +97,19 @@ impl AI {
         max_depth: u8,
         stop: &StopFlag,
         aborted: &mut bool,
+        search_limit: &T,
     ) -> i16 {
         if *aborted {
             return 0;
         }
-        if *nodes_searched % 2048 == 0 && stop.load(Ordering::Relaxed) {
-            *aborted = true;
-            return 0;
-        }
+        if *nodes_searched % 2048 == 0 {
+            if stop.load(Ordering::Relaxed) || search_limit.should_stop() {
+                *aborted = true;
+                return 0;
+            };
+        };
         if depth == 0 {
-            return AI::quiescence_search::<S>(
+            return AI::quiescence_search::<S, T>(
                 move_generator,
                 board,
                 alpha,
@@ -111,6 +117,7 @@ impl AI {
                 nodes_searched,
                 stop,
                 aborted,
+                search_limit,
             );
             //return board.evaluate() * S::MULTIPLIER;
         }
@@ -120,7 +127,7 @@ impl AI {
         let mut move_list = MoveList::default();
 
         move_generator.generate_moves_generic::<S>(&mut move_list, board);
-        move_list.score_moves(board, ply, killer_moves);
+        move_list.score_moves(board, ply, killer_moves, None);
         let mut legal_moves = 0;
         let moves = move_list.move_fetcher();
         for mv in moves {
@@ -128,7 +135,7 @@ impl AI {
             let undo = make_move::<S>(board, mv.mv);
             if !move_generator.is_king_in_check(board, S::COLOR) {
                 legal_moves += 1;
-                let score = -AI::nega_max::<S::Opposite>(
+                let score = -AI::nega_max::<S::Opposite, T>(
                     depth - 1,
                     move_generator,
                     board,
@@ -139,6 +146,7 @@ impl AI {
                     max_depth,
                     stop,
                     aborted,
+                    search_limit,
                 );
                 if score > best_score {
                     best_score = score;
@@ -167,7 +175,7 @@ impl AI {
         }
         return best_score;
     }
-    fn quiescence_search<S: Side + Castle + PawnDirection + Evaluation>(
+    fn quiescence_search<S: Side + Castle + PawnDirection + Evaluation, T: TimeLimit>(
         move_generator: &MoveGenerator,
         board: &mut Board,
         mut alpha: i16,
@@ -175,15 +183,19 @@ impl AI {
         nodes_searched: &mut u32,
         stop: &StopFlag,
         aborted: &mut bool,
+        search_limit: &T,
     ) -> i16 {
         if *aborted {
             return 0;
         }
         let static_score = board.evaluate() * S::MULTIPLIER;
-        if *nodes_searched % 2048 == 0 && stop.load(Ordering::Relaxed) {
-            *aborted = true;
-            return static_score;
-        }
+        if *nodes_searched % 2048 == 0 {
+            if stop.load(Ordering::Relaxed) || search_limit.should_stop() {
+                // never stop depth_wise
+                *aborted = true;
+                return 0;
+            }
+        };
 
         if static_score >= beta {
             return static_score;
@@ -216,7 +228,7 @@ impl AI {
             *nodes_searched += 1;
             let undo = make_move::<S>(board, mv.mv);
             if !move_generator.is_king_in_check(board, S::COLOR) {
-                let score = -AI::quiescence_search::<S::Opposite>(
+                let score = -AI::quiescence_search::<S::Opposite, T>(
                     move_generator,
                     board,
                     -beta,
@@ -224,6 +236,7 @@ impl AI {
                     nodes_searched,
                     stop,
                     aborted,
+                    search_limit,
                 );
                 if score > best_score {
                     best_score = score;
@@ -242,12 +255,34 @@ impl AI {
         return best_score;
     }
 }
+pub trait TimeLimit {
+    fn should_stop(&self) -> bool;
+}
+pub struct NoLimit;
+impl TimeLimit for NoLimit {
+    fn should_stop(&self) -> bool {
+        false
+    }
+}
+pub struct LimitedTime {
+    pub start: Instant,
+    pub allocated_time: u128,
+}
+impl TimeLimit for LimitedTime {
+    fn should_stop(&self) -> bool {
+        self.start.elapsed().as_millis() > self.allocated_time
+    }
+}
+
 mod tests {
     use std::sync::{Arc, atomic::AtomicBool};
 
     use crate::{
-        board::bitboard::Square,
-        board::board::{Board, Color},
+        ai::ai::NoLimit,
+        board::{
+            bitboard::Square,
+            board::{Board, Color},
+        },
         engine::make_move,
         moves::{
             move_generator::MoveGenerator,
@@ -265,7 +300,18 @@ mod tests {
         );
         let mvg = MoveGenerator::default();
         let stop_flag = Arc::new(AtomicBool::new(false));
-        let move_made = AI::make_decision(2, &mvg, &mut board, stop_flag);
+        let mut nodes = 0;
+        let time_limit = NoLimit;
+        let move_made = AI::make_decision(
+            2,
+            &mvg,
+            &mut board,
+            &stop_flag,
+            None,
+            &mut false,
+            &mut nodes,
+            &time_limit,
+        );
         make_move::<White>(&mut board, move_made.unwrap());
         board.side_to_move = board.side_to_move ^ 1;
         println!("{:?}", move_made.unwrap());
@@ -275,22 +321,51 @@ mod tests {
     #[test]
     fn nega_max_mate_test() {
         let stop_flag = Arc::new(AtomicBool::new(false));
+        let mut nodes = 0;
         let mut board = Board::from_FEN(
             "r1bq2r1/b4pk1/p1pp1p2/1p2pP2/1P2P1PB/3P4/1PPQ2P1/R3K2R w KQ - 0 1".to_string(),
         );
         println! {"{}", board};
         let mvg = MoveGenerator::default();
-        let move_made = AI::make_decision(4, &mvg, &mut board, stop_flag.clone());
+        let time_limit = NoLimit;
+        let move_made = AI::make_decision(
+            4,
+            &mvg,
+            &mut board,
+            &stop_flag,
+            None,
+            &mut false,
+            &mut nodes,
+            &time_limit,
+        );
         println!("{:?}", move_made.unwrap());
         make_move::<White>(&mut board, move_made.unwrap());
         println! {"{}", board};
         board.side_to_move = board.side_to_move ^ 1;
-        let move_made = AI::make_decision(4, &mvg, &mut board, stop_flag.clone());
+        let move_made = AI::make_decision(
+            4,
+            &mvg,
+            &mut board,
+            &stop_flag,
+            None,
+            &mut false,
+            &mut nodes,
+            &time_limit,
+        );
         println!("{:?}", move_made.unwrap());
         make_move::<Black>(&mut board, move_made.unwrap());
         println! {"{}", board};
         board.side_to_move = board.side_to_move ^ 1;
-        let move_made = AI::make_decision(4, &mvg, &mut board, stop_flag.clone());
+        let move_made = AI::make_decision(
+            4,
+            &mvg,
+            &mut board,
+            &stop_flag,
+            None,
+            &mut false,
+            &mut nodes,
+            &time_limit,
+        );
         make_move::<White>(&mut board, move_made.unwrap());
         println!("{:?}", move_made.unwrap());
         println! {"{}", board};

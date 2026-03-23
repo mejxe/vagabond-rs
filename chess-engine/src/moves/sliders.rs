@@ -10,6 +10,8 @@ use super::move_generator::Occupancy;
 pub const ROOK_MASK_TABLE: [BitBoard; 64] = Occupancy::generate_slider_mask_tbl(PieceType::Rook);
 pub const BISHOP_MASK_TABLE: [BitBoard; 64] =
     Occupancy::generate_slider_mask_tbl(PieceType::Bishop);
+pub static BISHOP_ATK_TABLE: OnceLock<Vec<BitBoard>> = OnceLock::new();
+pub static ROOK_ATK_TABLE: OnceLock<Vec<BitBoard>> = OnceLock::new();
 
 pub const CASTLING_MASK: [u8; 64] = {
     let mut mask = [0xf; 64];

@@ -14,6 +14,7 @@ use super::{
         B_PAWN_ATK_TABLE, KING_ATK_TABLE, KNIGHT_ATK_TABLE, PAWN_ATK_TABLE, W_PAWN_ATK_TABLE,
     },
     move_structs::{ExtMove, Move, MoveType},
+    sliders::{BISHOP_ATK_TABLE, ROOK_ATK_TABLE},
     traits::{Black, Castle, PawnDirection, Side, White},
 };
 
@@ -54,8 +55,20 @@ impl MoveList {
     pub fn as_slice(&self) -> &[ExtMove] {
         &self.moves[0..self.count]
     }
-    pub fn score_moves(&mut self, board: &Board, ply: u8, killers: &[[Option<Move>; 2]; 64]) {
+    pub fn score_moves(
+        &mut self,
+        board: &Board,
+        ply: u8,
+        killers: &[[Option<Move>; 2]; 64],
+        pv: Option<Move>,
+    ) {
         for mv in self.moves[..self.count].iter_mut() {
+            if let Some(pv) = pv {
+                if mv.mv == pv {
+                    mv.score = 10000;
+                    continue;
+                }
+            }
             mv.score_move(board, ply, killers);
         }
     }
@@ -111,11 +124,8 @@ impl<'a> Iterator for MoveFetcher<'a> {
         Some(best_move)
     }
 }
-#[derive(Clone)]
-pub struct MoveGenerator {
-    rook_atk: Vec<BitBoard>,
-    bishop_atk: Vec<BitBoard>,
-}
+#[derive(Clone, Default)]
+pub struct MoveGenerator;
 impl MoveGenerator {
     pub fn generate_moves(&self, move_list: &mut MoveList, board: &Board) {
         match board.side_to_move {
@@ -261,7 +271,7 @@ impl MoveGenerator {
         let index = unsafe { _pext_u64(occupancy.0, mask.0) };
         let offset_index = (square as u64 * 4096 + index as u64) as usize;
 
-        self.rook_atk[offset_index]
+        ROOK_ATK_TABLE.get().unwrap()[offset_index]
     }
     pub fn get_bishop_atk(&self, square: Square, occupancy: BitBoard) -> BitBoard {
         let mask = BISHOP_MASK_TABLE[square as usize];
@@ -269,7 +279,7 @@ impl MoveGenerator {
         let index = unsafe { _pext_u64(occupancy.0, mask.0) };
         let offset_index = (square as u64 * 512 + index as u64) as usize;
 
-        self.bishop_atk[offset_index]
+        BISHOP_ATK_TABLE.get().unwrap()[offset_index]
     }
     pub fn generate_moves_for_piece(
         &self,
@@ -504,18 +514,12 @@ impl MoveGenerator {
 
         false
     }
-}
-
-impl Default for MoveGenerator {
-    fn default() -> Self {
-        let rook_atk = MoveGenerator::init_rook_atk_table();
-        let bishop_atk = MoveGenerator::init_bishop_atk_table();
-        Self {
-            rook_atk,
-            bishop_atk,
-        }
+    pub fn init_slider_atk_tables() {
+        BISHOP_ATK_TABLE.set(Self::init_bishop_atk_table()).unwrap();
+        ROOK_ATK_TABLE.set(Self::init_rook_atk_table()).unwrap();
     }
 }
+
 pub struct Occupancy; // method aggregate for dealing with occupancy
 impl Occupancy {
     pub const fn get_nth_occupancy_for_mask(

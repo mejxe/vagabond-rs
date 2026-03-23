@@ -8,7 +8,7 @@ use std::sync::mpsc::Sender;
 
 use super::{
     handler::{Handler, StopFlag},
-    structs::{UciIn, UciOut},
+    structs::{EngineIdentity, UciIn, UciOut},
 };
 
 pub struct Communication;
@@ -38,15 +38,16 @@ impl Communication {
     pub fn broadcast(out_rx: Receiver<UciOut>) {
         while let Ok(out_msg) = out_rx.recv() {
             match out_msg {
-                UciOut::Info => Self::print_uci(),
+                UciOut::UciOk(identity) => Self::print_uci(identity),
                 UciOut::ReadyOk => println!("readyok"),
                 UciOut::BestMove(mv) => println!("bestmove {mv}"),
                 UciOut::Board(board) => println!("{board}"),
+                UciOut::Info(inf) => println!("info {inf}"),
                 _ => {}
             }
         }
     }
-    fn print_uci() {
-        println!("{}\nuciok", IDENTITY)
+    fn print_uci(identity: EngineIdentity) {
+        println!("{}\nuciok", identity)
     }
 }

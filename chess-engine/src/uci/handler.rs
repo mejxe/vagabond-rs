@@ -32,7 +32,7 @@ impl Handler {
     pub fn handle(&mut self) {
         while let Ok(instruction) = self.receiver.recv() {
             match instruction {
-                UciIn::Uci => self.transmiter.send(UciOut::Info).unwrap(),
+                UciIn::Uci => self.transmiter.send(UciOut::UciOk(IDENTITY)).unwrap(),
                 UciIn::GoDepth(depth) => {
                     self.stop.store(false, Ordering::Relaxed);
                     let stop_clone = self.stop.clone();
@@ -40,7 +40,18 @@ impl Handler {
                     let tx_clone = self.transmiter.clone();
                     std::thread::spawn(move || {
                         if let Some(mv) = engine_clone.go(depth, stop_clone) {
-                            tx_clone.send(UciOut::BestMove(mv));
+                            tx_clone.send(UciOut::BestMove(mv)).unwrap();
+                        }
+                    });
+                }
+                UciIn::GoTime(time_params) => {
+                    self.stop.store(false, Ordering::Relaxed);
+                    let stop_clone = self.stop.clone();
+                    let mut engine_clone = self.engine.clone();
+                    let tx_clone = self.transmiter.clone();
+                    std::thread::spawn(move || {
+                        if let Some(mv) = engine_clone.go_time(time_params, stop_clone) {
+                            tx_clone.send(UciOut::BestMove(mv)).unwrap();
                         }
                     });
                 }
