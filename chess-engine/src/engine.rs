@@ -5,7 +5,8 @@ use std::{
 
 use crate::{
     ai::{
-        ai::{AI, LimitedTime, NoLimit},
+        LimitedTime, NoLimit,
+        ai::AI,
         evaluation::{Evaluation, PestoEvaluation},
     },
     board::{
@@ -29,7 +30,6 @@ use crate::{
 pub struct Engine {
     board: Board,
     move_gen: MoveGenerator,
-    ai: AI,
     depth: u8,
     tx: Option<Sender<UciOut>>,
 }
@@ -39,7 +39,6 @@ impl Default for Engine {
         Self {
             board: Board::default(),
             move_gen: MoveGenerator::default(),
-            ai: AI,
             depth: 5,
             tx: None,
         }
@@ -76,53 +75,59 @@ impl Engine {
             start: Instant::now(),
             allocated_time,
         };
+        let mut ai = AI::new(
+            aborted,
+            stop,
+            time_limit,
+            nodes_searched,
+            self.move_gen.clone(),
+        );
         while !aborted {
-            best_move = AI::make_decision(
-                current_depth,
-                &mut self.move_gen,
-                &mut self.board,
-                &stop,
-                best_move,
-                &mut aborted,
-                &mut nodes_searched,
-                &time_limit,
-            );
+            let current_best_move = ai.make_decision(current_depth, &mut self.board, best_move);
+            if aborted && best_move.is_some() {
+                break; // dont send the move that it aborted on
+            }
             if let Some(tx) = &self.tx {
+                let pv = ai.pv_table.get_pv(current_depth);
                 let uci_params = InfoParams {
                     nodes_searched,
-                    best_mv: best_move,
+                    pv,
                     curr_depth: current_depth,
                 };
                 tx.send(UciOut::Info(uci_params)).unwrap();
             }
+            best_move = current_best_move;
             current_depth += 1;
         }
         best_move
     }
     pub fn go(&mut self, max_depth: u8, stop: StopFlag) -> Option<Move> {
-        let mut aborted = false;
-        let mut nodes_searched = 0;
+        let aborted = false;
+        let nodes_searched = 0;
         let mut best_move: Option<Move> = None;
         let time_limit = NoLimit;
+        let mut ai = AI::new(
+            aborted,
+            stop,
+            time_limit,
+            nodes_searched,
+            self.move_gen.clone(),
+        );
         for current_depth in 1..=max_depth {
-            best_move = AI::make_decision(
-                current_depth,
-                &mut self.move_gen,
-                &mut self.board,
-                &stop,
-                best_move,
-                &mut aborted,
-                &mut nodes_searched,
-                &time_limit,
-            );
+            let current_best_move = ai.make_decision(current_depth, &mut self.board, best_move);
+            if aborted {
+                break;
+            }
             if let Some(tx) = &self.tx {
+                let pv = ai.pv_table.get_pv(current_depth);
                 let uci_params = InfoParams {
-                    nodes_searched,
-                    best_mv: best_move,
+                    nodes_searched: ai.nodes_searched(),
+                    pv,
                     curr_depth: current_depth,
                 };
                 tx.send(UciOut::Info(uci_params)).unwrap();
             }
+            best_move = current_best_move;
         }
         best_move
     }
@@ -442,7 +447,6 @@ mod debug_tests {
         let mut move_list = MoveList::default();
         move_generator.generate_captures::<White>(&mut move_list, &board);
         let moves = move_list.as_slice();
-        dbg!(moves.len());
         for mv in moves {
             println!("{mv}");
         }

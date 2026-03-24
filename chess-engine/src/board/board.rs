@@ -281,6 +281,12 @@ impl Board {
         let eg = self.eg_score as i32 * (24 - clamped as i32);
         ((mg + eg) / 24) as i16
     }
+    pub fn evaluate_piece(&self, piece: PieceType) -> u16 {
+        let clamped = self.phase.min(24);
+        let mg = PestoEvaluation::MG_MATERIAL_VAL[piece as usize] as u32 * clamped as u32;
+        let eg = PestoEvaluation::EG_MATERIAL_VAL[piece as usize] as u32 * (24 - clamped as u32);
+        ((mg + eg) / 24) as u16
+    }
     pub fn add_score<S: Evaluation>(&mut self, square: Square, piece: Piece) {
         self.mg_score += PestoEvaluation::get_mg_score(square, piece) * S::MULTIPLIER;
         self.eg_score += PestoEvaluation::get_eg_score(square, piece) * S::MULTIPLIER;

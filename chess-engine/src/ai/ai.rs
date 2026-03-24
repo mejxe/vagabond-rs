@@ -1,4 +1,4 @@
-use std::{f32::MIN, i16, sync::atomic::Ordering, time::Instant};
+use std::{char::MAX, f32::MIN, i16, sync::atomic::Ordering, time::Instant};
 
 use crate::{
     ai::evaluation::Evaluation,
@@ -16,69 +16,86 @@ use crate::{
     uci::handler::StopFlag,
 };
 
-use super::evaluation::PestoEvaluation;
+use super::{TimeLimit, evaluation::PestoEvaluation};
 
 #[derive(Clone)]
-pub struct AI;
-impl AI {
-    pub fn make_decision<T: TimeLimit>(
+pub struct AI<T: TimeLimit> {
+    aborted: bool,
+    stop: StopFlag,
+    killer_moves: [[Option<Move>; 2]; 64],
+    time_limit: T,
+    nodes_searched: u32,
+    move_generator: MoveGenerator,
+    pub pv_table: PvArray,
+}
+impl<T: TimeLimit> AI<T> {
+    pub fn new(
+        aborted: bool,
+        stop: StopFlag,
+        time_limit: T,
+        nodes_searched: u32,
+        move_generator: MoveGenerator,
+    ) -> Self {
+        Self {
+            aborted,
+            stop,
+            killer_moves: [[None; 2]; 64],
+            time_limit,
+            nodes_searched,
+            move_generator,
+            pv_table: PvArray::new(),
+        }
+    }
+    pub fn reset_fields(&mut self) {
+        self.killer_moves = [[None; 2]; 64];
+        self.nodes_searched = 0;
+        self.time_limit.restart()
+    }
+    pub fn make_decision(
+        &mut self,
         current_depth: u8,
-        move_generator: &MoveGenerator,
         board: &mut Board,
-        stop: &StopFlag,
         pv: Option<Move>,
-        aborted: &mut bool,
-        nodes_searched: &mut u32,
-        time_limit: &T,
     ) -> Option<Move> {
         let mut best_mv: Option<Move> = pv;
         // reset
-        let mut killer_moves: [[Option<Move>; 2]; 64] = [[None; 2]; 64];
         let mut max = -31000;
         let mut move_list = MoveList::default();
         let mut alpha = max;
         let beta = -alpha;
-        move_generator.generate_moves(&mut move_list, board);
-        move_list.score_moves(board, 0, &killer_moves, best_mv);
+        self.move_generator.generate_moves(&mut move_list, board);
+        move_list.score_moves(board, 0, &self.killer_moves, best_mv);
         let moves = move_list.move_fetcher();
         for mv in moves {
-            if stop.load(Ordering::Relaxed) {
+            if current_depth > 1 && self.stop.load(Ordering::Relaxed) {
                 break;
             };
             let undo = make_move_non_generic(board, mv.mv);
-            if !move_generator.is_king_in_check(board, board.side_to_move) {
+            if !self
+                .move_generator
+                .is_king_in_check(board, board.side_to_move)
+            {
                 let score = match board.side_to_move {
-                    Color::White => -AI::nega_max::<Black, T>(
+                    Color::White => -self.nega_max::<Black>(
                         current_depth - 1,
-                        move_generator,
                         board,
                         -beta,
                         -alpha,
-                        nodes_searched,
-                        &mut killer_moves,
                         current_depth,
-                        &stop,
-                        aborted,
-                        time_limit,
                     ),
-                    Color::Black => -AI::nega_max::<White, T>(
+                    Color::Black => -self.nega_max::<White>(
                         current_depth - 1,
-                        move_generator,
                         board,
                         -beta,
                         -alpha,
-                        nodes_searched,
-                        &mut killer_moves,
                         current_depth,
-                        &stop,
-                        aborted,
-                        time_limit,
                     ),
                 };
 
                 if score > max {
                     max = score;
                     best_mv = Some(mv.mv);
+                    self.pv_table.put_pv(0, mv.mv);
                 };
                 alpha = i16::max(alpha, max);
             }
@@ -86,39 +103,25 @@ impl AI {
         }
         return best_mv;
     }
-    fn nega_max<S: Side + Castle + PawnDirection + Evaluation, T: TimeLimit>(
+    fn nega_max<S: Side + Castle + PawnDirection + Evaluation>(
+        &mut self,
         depth: u8,
-        move_generator: &MoveGenerator,
         board: &mut Board,
         mut alpha: i16,
         beta: i16,
-        nodes_searched: &mut u32,
-        killer_moves: &mut [[Option<Move>; 2]; 64],
         max_depth: u8,
-        stop: &StopFlag,
-        aborted: &mut bool,
-        search_limit: &T,
     ) -> i16 {
-        if *aborted {
+        if self.aborted {
             return 0;
         }
-        if *nodes_searched % 2048 == 0 {
-            if stop.load(Ordering::Relaxed) || search_limit.should_stop() {
-                *aborted = true;
+        if self.nodes_searched % 2048 == 0 {
+            if self.stop.load(Ordering::Relaxed) || self.time_limit.should_stop() {
+                self.aborted = true;
                 return 0;
             };
         };
         if depth == 0 {
-            return AI::quiescence_search::<S, T>(
-                move_generator,
-                board,
-                alpha,
-                beta,
-                nodes_searched,
-                stop,
-                aborted,
-                search_limit,
-            );
+            return self.quiescence_search::<S>(board, alpha, beta);
             //return board.evaluate() * S::MULTIPLIER;
         }
         let mut best_score = i16::MIN;
@@ -126,37 +129,27 @@ impl AI {
 
         let mut move_list = MoveList::default();
 
-        move_generator.generate_moves_generic::<S>(&mut move_list, board);
-        move_list.score_moves(board, ply, killer_moves, None);
+        self.move_generator
+            .generate_moves_generic::<S>(&mut move_list, board);
+        move_list.score_moves(board, ply, &self.killer_moves, None);
         let mut legal_moves = 0;
         let moves = move_list.move_fetcher();
         for mv in moves {
-            *nodes_searched += 1;
+            self.nodes_searched += 1;
             let undo = make_move::<S>(board, mv.mv);
-            if !move_generator.is_king_in_check(board, S::COLOR) {
+            if !self.move_generator.is_king_in_check(board, S::COLOR) {
                 legal_moves += 1;
-                let score = -AI::nega_max::<S::Opposite, T>(
-                    depth - 1,
-                    move_generator,
-                    board,
-                    -beta,
-                    -alpha,
-                    nodes_searched,
-                    killer_moves,
-                    max_depth,
-                    stop,
-                    aborted,
-                    search_limit,
-                );
+                let score =
+                    -self.nega_max::<S::Opposite>(depth - 1, board, -beta, -alpha, max_depth);
                 if score > best_score {
                     best_score = score;
                 }
 
                 if score >= beta {
                     if !mv.mv.move_type().is_capture() {
-                        if killer_moves[ply as usize][0] != Some(mv.mv) {
-                            killer_moves[ply as usize][1] = killer_moves[ply as usize][0];
-                            killer_moves[ply as usize][0] = Some(mv.mv);
+                        if self.killer_moves[ply as usize][0] != Some(mv.mv) {
+                            self.killer_moves[ply as usize][1] = self.killer_moves[ply as usize][0];
+                            self.killer_moves[ply as usize][0] = Some(mv.mv);
                         }
                     }
                     undo_move::<S>(mv.mv, board, undo);
@@ -164,38 +157,36 @@ impl AI {
                 }
                 if best_score > alpha {
                     alpha = best_score;
+                    self.pv_table.put_pv(ply, mv.mv);
                 }
             }
             undo_move::<S>(mv.mv, board, undo);
         }
-        if legal_moves == 0 && move_generator.is_king_in_check(board, S::COLOR) {
+        if legal_moves == 0 && self.move_generator.is_king_in_check(board, S::COLOR) {
             return -30000 + ply as i16;
         } else if legal_moves == 0 {
             return 0;
         }
         return best_score;
     }
-    fn quiescence_search<S: Side + Castle + PawnDirection + Evaluation, T: TimeLimit>(
-        move_generator: &MoveGenerator,
+    fn quiescence_search<S: Side + Castle + PawnDirection + Evaluation>(
+        &mut self,
         board: &mut Board,
         mut alpha: i16,
         beta: i16,
-        nodes_searched: &mut u32,
-        stop: &StopFlag,
-        aborted: &mut bool,
-        search_limit: &T,
     ) -> i16 {
-        if *aborted {
+        if self.aborted {
             return 0;
         }
-        let static_score = board.evaluate() * S::MULTIPLIER;
-        if *nodes_searched % 2048 == 0 {
-            if stop.load(Ordering::Relaxed) || search_limit.should_stop() {
+        if self.nodes_searched % 2048 == 0 {
+            if self.stop.load(Ordering::Relaxed) || self.time_limit.should_stop() {
                 // never stop depth_wise
-                *aborted = true;
+                self.aborted = true;
                 return 0;
             }
         };
+
+        let static_score = board.evaluate() * S::MULTIPLIER;
 
         if static_score >= beta {
             return static_score;
@@ -205,7 +196,8 @@ impl AI {
         }
         let mut best_score = static_score;
         let mut move_list = MoveList::default();
-        move_generator.generate_captures::<S>(&mut move_list, board);
+        self.move_generator
+            .generate_captures::<S>(&mut move_list, board);
         move_list.score_captures(board);
 
         let moves = move_list.move_fetcher();
@@ -217,7 +209,7 @@ impl AI {
                     color: Color::White,
                 })
                 .piece_type;
-            let victim_value = PestoEvaluation::EG_MATERIAL_VAL[victim_piece as usize];
+            let victim_value = board.evaluate_piece(victim_piece) as i16;
 
             // delta pruning
             let safety_margin = 200;
@@ -225,19 +217,10 @@ impl AI {
                 continue;
             }
 
-            *nodes_searched += 1;
+            self.nodes_searched += 1;
             let undo = make_move::<S>(board, mv.mv);
-            if !move_generator.is_king_in_check(board, S::COLOR) {
-                let score = -AI::quiescence_search::<S::Opposite, T>(
-                    move_generator,
-                    board,
-                    -beta,
-                    -alpha,
-                    nodes_searched,
-                    stop,
-                    aborted,
-                    search_limit,
-                );
+            if !self.move_generator.is_king_in_check(board, S::COLOR) {
+                let score = -self.quiescence_search::<S::Opposite>(board, -beta, -alpha);
                 if score > best_score {
                     best_score = score;
                 }
@@ -254,23 +237,37 @@ impl AI {
         }
         return best_score;
     }
-}
-pub trait TimeLimit {
-    fn should_stop(&self) -> bool;
-}
-pub struct NoLimit;
-impl TimeLimit for NoLimit {
-    fn should_stop(&self) -> bool {
-        false
+
+    pub fn nodes_searched(&self) -> u32 {
+        self.nodes_searched
     }
 }
-pub struct LimitedTime {
-    pub start: Instant,
-    pub allocated_time: u128,
+const MAX_DEPTH_NUM: u8 = 15;
+#[derive(Clone, Copy, Debug)]
+pub struct PvArray {
+    moves: [Option<Move>; ((MAX_DEPTH_NUM * MAX_DEPTH_NUM + MAX_DEPTH_NUM) / 2) as usize],
 }
-impl TimeLimit for LimitedTime {
-    fn should_stop(&self) -> bool {
-        self.start.elapsed().as_millis() > self.allocated_time
+impl PvArray {
+    pub fn new() -> PvArray {
+        PvArray {
+            moves: [None; ((MAX_DEPTH_NUM * MAX_DEPTH_NUM + MAX_DEPTH_NUM) / 2) as usize],
+        }
+    }
+    pub fn get_pv_index(ply: u8) -> usize {
+        let index = MAX_DEPTH_NUM * ply - (ply * (ply.saturating_sub(1))) / 2;
+        index as usize
+    }
+    pub fn put_pv(&mut self, ply: u8, mv: Move) {
+        let current_index = PvArray::get_pv_index(ply);
+        self.moves[current_index] = Some(mv);
+        let next_index = PvArray::get_pv_index(ply + 1);
+        for i in 0..(MAX_DEPTH_NUM - ply - 1) {
+            self.moves[current_index + 1 + i as usize] = self.moves[next_index + i as usize];
+        }
+    }
+    pub fn get_pv(&self, depth_searched: u8) -> Vec<Option<Move>> {
+        // TODO: Rewrite to an array of max_depth_num
+        self.moves[0..depth_searched as usize].to_vec()
     }
 }
 
@@ -278,7 +275,7 @@ mod tests {
     use std::sync::{Arc, atomic::AtomicBool};
 
     use crate::{
-        ai::ai::NoLimit,
+        ai::NoLimit,
         board::{
             bitboard::Square,
             board::{Board, Color},
@@ -286,6 +283,7 @@ mod tests {
         engine::make_move,
         moves::{
             move_generator::MoveGenerator,
+            move_structs::Move,
             traits::{Black, White},
         },
     };
@@ -300,18 +298,10 @@ mod tests {
         );
         let mvg = MoveGenerator::default();
         let stop_flag = Arc::new(AtomicBool::new(false));
-        let mut nodes = 0;
+        let nodes = 0;
         let time_limit = NoLimit;
-        let move_made = AI::make_decision(
-            2,
-            &mvg,
-            &mut board,
-            &stop_flag,
-            None,
-            &mut false,
-            &mut nodes,
-            &time_limit,
-        );
+        let mut ai = AI::new(false, stop_flag, time_limit, nodes, mvg);
+        let move_made = ai.make_decision(2, &mut board, None);
         make_move::<White>(&mut board, move_made.unwrap());
         board.side_to_move = board.side_to_move ^ 1;
         println!("{:?}", move_made.unwrap());
@@ -321,51 +311,27 @@ mod tests {
     #[test]
     fn nega_max_mate_test() {
         let stop_flag = Arc::new(AtomicBool::new(false));
-        let mut nodes = 0;
+        let nodes = 0;
         let mut board = Board::from_FEN(
             "r1bq2r1/b4pk1/p1pp1p2/1p2pP2/1P2P1PB/3P4/1PPQ2P1/R3K2R w KQ - 0 1".to_string(),
         );
         println! {"{}", board};
         let mvg = MoveGenerator::default();
         let time_limit = NoLimit;
-        let move_made = AI::make_decision(
-            4,
-            &mvg,
-            &mut board,
-            &stop_flag,
-            None,
-            &mut false,
-            &mut nodes,
-            &time_limit,
-        );
+        let mut ai = AI::new(false, stop_flag, time_limit, nodes, mvg.clone());
+        let move_made = ai.make_decision(4, &mut board, None);
         println!("{:?}", move_made.unwrap());
         make_move::<White>(&mut board, move_made.unwrap());
         println! {"{}", board};
         board.side_to_move = board.side_to_move ^ 1;
-        let move_made = AI::make_decision(
-            4,
-            &mvg,
-            &mut board,
-            &stop_flag,
-            None,
-            &mut false,
-            &mut nodes,
-            &time_limit,
-        );
+        ai.reset_fields();
+        let move_made = ai.make_decision(4, &mut board, None);
         println!("{:?}", move_made.unwrap());
         make_move::<Black>(&mut board, move_made.unwrap());
         println! {"{}", board};
         board.side_to_move = board.side_to_move ^ 1;
-        let move_made = AI::make_decision(
-            4,
-            &mvg,
-            &mut board,
-            &stop_flag,
-            None,
-            &mut false,
-            &mut nodes,
-            &time_limit,
-        );
+        ai.reset_fields();
+        let move_made = ai.make_decision(4, &mut board, None);
         make_move::<White>(&mut board, move_made.unwrap());
         println!("{:?}", move_made.unwrap());
         println! {"{}", board};
