@@ -1,6 +1,6 @@
 [workspace]
 
 members = [
-    "chess-engine",
+    "vagabond-rs",
     "macros",
 ]

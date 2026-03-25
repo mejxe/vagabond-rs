@@ -12,6 +12,7 @@ pub enum UciIn {
     Position(Board),
     GoDepth(u8),
     GoTime(GoTimeParams),
+    GoInfinite,
     Stop,
     Board,
     Exit,
@@ -29,6 +30,8 @@ pub struct InfoParams {
     pub curr_depth: u8,
     pub pv: Vec<Option<Move>>,
     pub nodes_searched: u32,
+    pub evaluation: i16,
+    pub time: u128,
 }
 #[derive(Debug, PartialEq)]
 pub struct GoTimeParams {
@@ -52,9 +55,10 @@ impl Display for InfoParams {
             })
             .collect::<Vec<String>>()
             .join(" ");
+        let nps = self.nodes_searched as u128 / self.time.max(1) * 1000;
         let msg = format!(
-            "depth {} nodes {} pv {}",
-            self.curr_depth, self.nodes_searched, pv
+            "depth {} nodes {} score cp {} time {} nps {} pv {} ",
+            self.curr_depth, self.nodes_searched, self.evaluation, self.time, nps, pv
         );
         write!(f, "{}", msg)
     }

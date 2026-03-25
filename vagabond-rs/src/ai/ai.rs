@@ -56,7 +56,7 @@ impl<T: TimeLimit> AI<T> {
         current_depth: u8,
         board: &mut Board,
         pv: Option<Move>,
-    ) -> Option<Move> {
+    ) -> (Option<Move>, i16) {
         let mut best_mv: Option<Move> = pv;
         // reset
         let mut max = -31000;
@@ -64,13 +64,14 @@ impl<T: TimeLimit> AI<T> {
         let mut alpha = max;
         let beta = -alpha;
         self.move_generator.generate_moves(&mut move_list, board);
-        move_list.score_moves(board, 0, &self.killer_moves, best_mv);
+        move_list.score_moves(board, 0, &self.killer_moves, &self.pv_table);
         let moves = move_list.move_fetcher();
         for mv in moves {
             if current_depth > 1 && self.stop.load(Ordering::Relaxed) {
                 break;
             };
             let undo = make_move_non_generic(board, mv.mv);
+            self.nodes_searched += 1;
             if !self
                 .move_generator
                 .is_king_in_check(board, board.side_to_move)
@@ -101,7 +102,7 @@ impl<T: TimeLimit> AI<T> {
             }
             undo_move_non_generic(board, mv.mv, undo, board.side_to_move);
         }
-        return best_mv;
+        return (best_mv, max);
     }
     fn nega_max<S: Side + Castle + PawnDirection + Evaluation>(
         &mut self,
@@ -131,7 +132,7 @@ impl<T: TimeLimit> AI<T> {
 
         self.move_generator
             .generate_moves_generic::<S>(&mut move_list, board);
-        move_list.score_moves(board, ply, &self.killer_moves, None);
+        move_list.score_moves(board, ply, &self.killer_moves, &self.pv_table);
         let mut legal_moves = 0;
         let moves = move_list.move_fetcher();
         for mv in moves {
@@ -241,6 +242,10 @@ impl<T: TimeLimit> AI<T> {
     pub fn nodes_searched(&self) -> u32 {
         self.nodes_searched
     }
+
+    pub fn aborted(&self) -> bool {
+        self.aborted
+    }
 }
 const MAX_DEPTH_NUM: u8 = 15;
 #[derive(Clone, Copy, Debug)]
@@ -265,9 +270,23 @@ impl PvArray {
             self.moves[current_index + 1 + i as usize] = self.moves[next_index + i as usize];
         }
     }
-    pub fn get_pv(&self, depth_searched: u8) -> Vec<Option<Move>> {
+    pub fn get_pv(&self) -> &[Option<Move>] {
         // TODO: Rewrite to an array of max_depth_num
-        self.moves[0..depth_searched as usize].to_vec()
+        let index = {
+            let mut i = 0;
+            for _ in 0..MAX_DEPTH_NUM {
+                if self.moves[i as usize].is_none() {
+                    break;
+                };
+                i += 1;
+            }
+            i
+        };
+        &self.moves[0..index as usize]
+    }
+    #[inline(always)]
+    pub fn get_move(&self, index: usize) -> Option<Move> {
+        self.moves[index]
     }
 }
 
@@ -301,7 +320,7 @@ mod tests {
         let nodes = 0;
         let time_limit = NoLimit;
         let mut ai = AI::new(false, stop_flag, time_limit, nodes, mvg);
-        let move_made = ai.make_decision(2, &mut board, None);
+        let (move_made, _) = ai.make_decision(2, &mut board, None);
         make_move::<White>(&mut board, move_made.unwrap());
         board.side_to_move = board.side_to_move ^ 1;
         println!("{:?}", move_made.unwrap());
@@ -319,19 +338,19 @@ mod tests {
         let mvg = MoveGenerator::default();
         let time_limit = NoLimit;
         let mut ai = AI::new(false, stop_flag, time_limit, nodes, mvg.clone());
-        let move_made = ai.make_decision(4, &mut board, None);
+        let (move_made, _) = ai.make_decision(4, &mut board, None);
         println!("{:?}", move_made.unwrap());
         make_move::<White>(&mut board, move_made.unwrap());
         println! {"{}", board};
         board.side_to_move = board.side_to_move ^ 1;
         ai.reset_fields();
-        let move_made = ai.make_decision(4, &mut board, None);
+        let (move_made, _) = ai.make_decision(4, &mut board, None);
         println!("{:?}", move_made.unwrap());
         make_move::<Black>(&mut board, move_made.unwrap());
         println! {"{}", board};
         board.side_to_move = board.side_to_move ^ 1;
         ai.reset_fields();
-        let move_made = ai.make_decision(4, &mut board, None);
+        let (move_made, _) = ai.make_decision(4, &mut board, None);
         make_move::<White>(&mut board, move_made.unwrap());
         println!("{:?}", move_made.unwrap());
         println! {"{}", board};

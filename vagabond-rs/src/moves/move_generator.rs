@@ -1,8 +1,11 @@
 use std::{arch::x86_64::_pext_u64, fmt::Display, path::Iter};
 
 use crate::{
-    board::bitboard::{self, BitBoard, Square},
-    board::board::{Board, CastlingRights, Color, Piece, PieceType},
+    ai::ai::PvArray,
+    board::{
+        bitboard::{self, BitBoard, Square},
+        board::{Board, CastlingRights, Color, Piece, PieceType},
+    },
     moves::sliders::{
         BISHOP_MASK_TABLE, ROOK_MASK_TABLE, generate_bishop_attacks, generate_bishop_mask,
         generate_rook_attacks, generate_rook_mask,
@@ -60,12 +63,13 @@ impl MoveList {
         board: &Board,
         ply: u8,
         killers: &[[Option<Move>; 2]; 64],
-        pv: Option<Move>,
+        pv: &PvArray,
     ) {
         for mv in self.moves[..self.count].iter_mut() {
-            if let Some(pv) = pv {
+            let index = PvArray::get_pv_index(ply);
+            if let Some(pv) = pv.get_move(index) {
                 if mv.mv == pv {
-                    mv.score = 10000;
+                    mv.score = 50000;
                     continue;
                 }
             }

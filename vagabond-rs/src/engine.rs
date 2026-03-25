@@ -68,11 +68,12 @@ impl Engine {
             allocated_time = my_time_left - 50; // padding for delays
         };
         let mut current_depth = 1;
-        let mut aborted = false;
-        let mut nodes_searched = 0;
+        let aborted = false;
+        let nodes_searched = 0;
         let mut best_move: Option<Move> = None;
+        let time_started = Instant::now();
         let time_limit = LimitedTime {
-            start: Instant::now(),
+            start: time_started,
             allocated_time,
         };
         let mut ai = AI::new(
@@ -83,16 +84,20 @@ impl Engine {
             self.move_gen.clone(),
         );
         while !aborted {
-            let current_best_move = ai.make_decision(current_depth, &mut self.board, best_move);
-            if aborted && best_move.is_some() {
+            let (current_best_move, evaluation) =
+                ai.make_decision(current_depth, &mut self.board, best_move);
+            let time_passed = time_started.elapsed().as_millis();
+            if ai.aborted() && best_move.is_some() {
                 break; // dont send the move that it aborted on
             }
             if let Some(tx) = &self.tx {
-                let pv = ai.pv_table.get_pv(current_depth);
+                let pv = ai.pv_table.get_pv();
                 let uci_params = InfoParams {
-                    nodes_searched,
-                    pv,
+                    nodes_searched: ai.nodes_searched(),
+                    pv: pv.to_vec(),
                     curr_depth: current_depth,
+                    evaluation,
+                    time: time_passed,
                 };
                 tx.send(UciOut::Info(uci_params)).unwrap();
             }
@@ -105,6 +110,7 @@ impl Engine {
         let aborted = false;
         let nodes_searched = 0;
         let mut best_move: Option<Move> = None;
+        let time_started = Instant::now();
         let time_limit = NoLimit;
         let mut ai = AI::new(
             aborted,
@@ -114,16 +120,20 @@ impl Engine {
             self.move_gen.clone(),
         );
         for current_depth in 1..=max_depth {
-            let current_best_move = ai.make_decision(current_depth, &mut self.board, best_move);
+            let (current_best_move, evaluation) =
+                ai.make_decision(current_depth, &mut self.board, best_move);
+            let time_elapsed = time_started.elapsed().as_millis();
             if aborted {
                 break;
             }
             if let Some(tx) = &self.tx {
-                let pv = ai.pv_table.get_pv(current_depth);
+                let pv = ai.pv_table.get_pv();
                 let uci_params = InfoParams {
                     nodes_searched: ai.nodes_searched(),
-                    pv,
+                    pv: pv.to_vec(),
                     curr_depth: current_depth,
+                    evaluation,
+                    time: time_elapsed,
                 };
                 tx.send(UciOut::Info(uci_params)).unwrap();
             }

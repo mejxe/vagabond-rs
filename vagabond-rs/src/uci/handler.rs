@@ -55,6 +55,17 @@ impl Handler {
                         }
                     });
                 }
+                UciIn::GoInfinite => {
+                    self.stop.store(false, Ordering::Relaxed);
+                    let stop_clone = self.stop.clone();
+                    let mut engine_clone = self.engine.clone();
+                    let tx_clone = self.transmiter.clone();
+                    std::thread::spawn(move || {
+                        if let Some(mv) = engine_clone.go(254, stop_clone) {
+                            tx_clone.send(UciOut::BestMove(mv)).unwrap();
+                        }
+                    });
+                }
                 UciIn::IsReady => self.transmiter.send(UciOut::ReadyOk).unwrap(),
                 UciIn::Position(pos) => self.engine.set_board(pos),
                 UciIn::Board => self

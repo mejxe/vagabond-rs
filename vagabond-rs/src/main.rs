@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, atomic::AtomicBool, mpsc::channel},
 };
 
-use chess_engine::{
+use vagabond_rs::{
     ai::ai::AI,
     board::board::Board,
     engine::{Engine, make_move},
@@ -32,7 +32,7 @@ fn main() -> Result<(), ()> {
     Communication::communication_loop(std_in, tx_in, stop_flag.clone())
 }
 mod tests {
-    use chess_engine::{board::board::Board, engine::Engine, performance::perft_entry};
+    use vagabond_rs::{board::board::Board, engine::Engine, performance::perft_entry};
 
     #[test]
     fn test_perft() {

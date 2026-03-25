@@ -37,6 +37,7 @@ impl Parser {
                     let depth = words[i + 1].parse::<u8>().ok()?;
                     return Some(UciIn::GoDepth(depth));
                 }
+                "infinite" => return Some(UciIn::GoInfinite),
                 "wtime" => {
                     wtime = words[i + 1].parse::<u128>().ok()?;
                 }
@@ -65,7 +66,6 @@ impl Parser {
     }
     fn parse_position(words: Vec<&str>) -> Option<UciIn> {
         let position_type = words.get(0).copied();
-        dbg!(&words);
         let mut moves_offset = 0;
         let mut entry_board = match position_type {
             Some("startpos") => Board::default(),
