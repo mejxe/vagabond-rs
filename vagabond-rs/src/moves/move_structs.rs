@@ -36,6 +36,12 @@ impl Move {
         }
     }
 }
+impl Default for Move {
+    fn default() -> Self {
+        // punjab move
+        Move::new(Square::A1, Square::A1, MoveType::Quiet)
+    }
+}
 pub enum Promotion {
     ToBishop,
     ToKnight,

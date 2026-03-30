@@ -580,7 +580,7 @@ mod tests {
     #[test]
     fn test_move_generation_perft_starting_board() {
         let mut board = Board::default();
-        let mut board_2 = Board::from_FEN(
+        let mut board_2 = Board::from_fen(
             "rnbqkbnr/pppppppp/8/8/8/4P3/PPPP1PPP/RNBQKBNR b KQkq - 0 1".to_string(),
         );
         println!("{board_2}");
@@ -600,7 +600,7 @@ mod tests {
     #[test]
     fn test_is_king_in_check() {
         let move_generator = MoveGenerator::default();
-        let board = Board::from_FEN("4k3/8/8/8/8/8/8/4K2r w - - 0 1".to_string());
+        let board = Board::from_fen("4k3/8/8/8/8/8/8/4K2r w - - 0 1".to_string());
         let king_sq = Square::from_u8_unchecked(
             board
                 .get_pieces(PieceType::King, Color::White)
@@ -610,7 +610,7 @@ mod tests {
         let is_attacked = move_generator.is_square_attacked::<White>(&board, king_sq);
         println!("{}", board);
         assert!(is_attacked);
-        let board = Board::from_FEN("8/8/8/8/8/2n5/8/1K6 w - - 0 1".to_string());
+        let board = Board::from_fen("8/8/8/8/8/2n5/8/1K6 w - - 0 1".to_string());
         let king_sq = Square::from_u8_unchecked(
             board
                 .get_pieces(PieceType::King, Color::White)
@@ -619,7 +619,7 @@ mod tests {
         );
         let is_attacked = move_generator.is_square_attacked::<White>(&board, king_sq);
         assert!(is_attacked);
-        let board = Board::from_FEN("8/6b1/8/8/3K4/8/8/8 w - - 0 1".to_string());
+        let board = Board::from_fen("8/6b1/8/8/3K4/8/8/8 w - - 0 1".to_string());
         let king_sq = Square::from_u8_unchecked(
             board
                 .get_pieces(PieceType::King, Color::White)
@@ -628,7 +628,7 @@ mod tests {
         );
         let is_attacked = move_generator.is_square_attacked::<White>(&board, king_sq);
         assert!(is_attacked);
-        let board = Board::from_FEN("8/8/8/q3K3/8/8/8/8 w - - 0 1".to_string());
+        let board = Board::from_fen("8/8/8/q3K3/8/8/8/8 w - - 0 1".to_string());
         let king_sq = Square::from_u8_unchecked(
             board
                 .get_pieces(PieceType::King, Color::White)
@@ -637,7 +637,7 @@ mod tests {
         );
         let is_attacked = move_generator.is_square_attacked::<White>(&board, king_sq);
         assert!(is_attacked);
-        let board = Board::from_FEN("8/8/8/q1P1K3/8/8/8/8 w - - 0 1".to_string());
+        let board = Board::from_fen("8/8/8/q1P1K3/8/8/8/8 w - - 0 1".to_string());
         let king_sq = Square::from_u8_unchecked(
             board
                 .get_pieces(PieceType::King, Color::White)
@@ -716,7 +716,7 @@ mod debug_tests {
     #[test]
     #[ignore]
     fn test_move_generation_debug() {
-        let mut board = Board::from_FEN(
+        let mut board = Board::from_fen(
             "rbnqkbnr/1ppppppp/8/p7/8/1N6/PPPPPPPP/RB1QKBNR w KQkq - 0 1".to_string(),
         );
         println!("{board}");
@@ -748,7 +748,7 @@ mod debug_tests {
     }
     #[test]
     fn test_castling_generation() {
-        let board = Board::from_FEN("4k3/8/8/8/8/8/8/4K2R w K - 0 1".to_string());
+        let board = Board::from_fen("4k3/8/8/8/8/8/8/4K2R w K - 0 1".to_string());
         println!("{}", board);
         let move_generator = MoveGenerator::default();
         let mut move_list = MoveList::default();
@@ -761,7 +761,7 @@ mod debug_tests {
     }
     #[test]
     fn debug_test() {
-        let board = Board::from_FEN("8/8/8/3pP3/8/8/8/8 w - d6 0 1".to_string());
+        let board = Board::from_fen("8/8/8/3pP3/8/8/8/8 w - d6 0 1".to_string());
         println!("{}", board);
         let move_generator = MoveGenerator::default();
         let mut move_list = MoveList::default();

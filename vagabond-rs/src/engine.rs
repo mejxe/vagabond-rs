@@ -1,5 +1,5 @@
 use std::{
-    sync::{Arc, atomic::AtomicBool, mpsc::Sender},
+    sync::{Arc, Mutex, atomic::AtomicBool, mpsc::Sender},
     time::Instant,
 };
 
@@ -20,6 +20,7 @@ use crate::{
         sliders::CASTLING_MASK,
         traits::{Black, Castle, PawnDirection, Side, White},
     },
+    tt::{transposition_table::TT, zobrist::ZobristHasher},
     uci::{
         handler::StopFlag,
         structs::{GoTimeParams, InfoParams, UciOut},
@@ -32,6 +33,7 @@ pub struct Engine {
     move_gen: MoveGenerator,
     depth: u8,
     tx: Option<Sender<UciOut>>,
+    tt: Arc<Mutex<TT>>,
 }
 impl Default for Engine {
     fn default() -> Self {
@@ -41,6 +43,7 @@ impl Default for Engine {
             move_gen: MoveGenerator::default(),
             depth: 5,
             tx: None,
+            tt: Arc::new(Mutex::new(TT::new(256))),
         }
     }
 }
@@ -82,6 +85,7 @@ impl Engine {
             time_limit,
             nodes_searched,
             self.move_gen.clone(),
+            self.tt.clone(),
         );
         while !aborted {
             let (current_best_move, evaluation) =
@@ -99,7 +103,9 @@ impl Engine {
                     evaluation,
                     time: time_passed,
                 };
-                tx.send(UciOut::Info(uci_params)).unwrap();
+                if !ai.aborted() {
+                    tx.send(UciOut::Info(uci_params)).unwrap();
+                }
             }
             best_move = current_best_move;
             current_depth += 1;
@@ -118,6 +124,7 @@ impl Engine {
             time_limit,
             nodes_searched,
             self.move_gen.clone(),
+            self.tt.clone(),
         );
         for current_depth in 1..=max_depth {
             let (current_best_move, evaluation) =
@@ -135,7 +142,9 @@ impl Engine {
                     evaluation,
                     time: time_elapsed,
                 };
-                tx.send(UciOut::Info(uci_params)).unwrap();
+                if !ai.aborted() {
+                    tx.send(UciOut::Info(uci_params)).unwrap();
+                }
             }
             best_move = current_best_move;
         }
@@ -157,8 +166,8 @@ pub fn make_move_non_generic(board: &mut Board, mv: Move) -> Undo {
         Color::Black => make_move::<Black>(board, mv),
     }
 }
-pub fn undo_move_non_generic(board: &mut Board, mv: Move, undo: Undo, color: Color) {
-    match color {
+pub fn undo_move_non_generic(board: &mut Board, mv: Move, undo: Undo) {
+    match board.side_to_move {
         Color::White => undo_move::<White>(mv, board, undo),
         Color::Black => undo_move::<Black>(mv, board, undo),
     };
@@ -177,6 +186,8 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
     };
     board.set_en_passant_square(None);
     let color = S::COLOR;
+    let opposite_color = S::Opposite::COLOR;
+    let hasher = ZobristHasher::get_hasher();
     let mover = board.get_piece_at_square(from).unwrap();
     if move_type.is_capture() {
         let piece_pos = if let MoveType::EnPassant = move_type {
@@ -185,7 +196,6 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
         } else {
             to
         };
-        let opposite_color = S::Opposite::COLOR;
         let captured = board.get_piece_at_square(piece_pos).unwrap();
         undo_move.captured_piece = Some(captured.piece_type);
         // update evaluation
@@ -196,9 +206,10 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
         board.occupied_by_color[opposite_color as usize].0 ^= cap_mask;
         board.pieces[opposite_color as usize][captured.piece_type as usize].0 ^= cap_mask;
         board.set_piece_at_square(piece_pos, None);
+        hasher.update_piece_hash(&mut board.zobrist, captured, piece_pos); // update hash after deleting captured
     }
 
-    // set ep square for dpush
+    // set ep square after a double push
     if let MoveType::DoublePush = move_type {
         board.set_en_passant_square(Some(S::get_source_single(to)));
     }
@@ -218,6 +229,9 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
         board.phase += PestoEvaluation::PIECE_PHASE_INCR[promotion as usize]; // + phase of promoted
         board.add_score::<S>(to, new_piece); //+ val of promoted
         board.subtract_score::<S>(from, mover); // - val of old square
+        // update hash
+        hasher.update_piece_hash(&mut board.zobrist, new_piece, to); // add new promoted piece
+        hasher.update_piece_hash(&mut board.zobrist, mover, from); // delete the old pawn
     } else {
         let rook = Piece {
             piece_type: PieceType::Rook,
@@ -233,6 +247,9 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
                 board.set_piece_at_square(S::QUEEN_SIDE_ROOK_POS, Some(rook));
                 board.add_score::<S>(S::QUEEN_SIDE_ROOK_POS, rook); // + val of rook new square
                 board.subtract_score::<S>(S::QUEEN_ROOK_START_POS, rook); // - val of starting rook square
+                // update hash
+                hasher.update_piece_hash(&mut board.zobrist, rook, to);
+                hasher.update_piece_hash(&mut board.zobrist, rook, from);
             }
             MoveType::KingSideCastle => {
                 let mask =
@@ -244,6 +261,9 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
                 board.set_piece_at_square(S::KING_SIDE_ROOK_POS, Some(rook));
                 board.add_score::<S>(S::KING_SIDE_ROOK_POS, rook); // + val of rook new square
                 board.subtract_score::<S>(S::KING_ROOK_START_POS, rook); // - val of starting rook square
+                // update haash
+                hasher.update_piece_hash(&mut board.zobrist, rook, to);
+                hasher.update_piece_hash(&mut board.zobrist, rook, from);
             }
             _ => {}
         };
@@ -254,11 +274,16 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
 
         board.subtract_score::<S>(from, mover); // - val of old square
         board.add_score::<S>(to, mover); // + val of new square
+        // update hash of mover
+        hasher.update_piece_hash(&mut board.zobrist, mover, from);
+        hasher.update_piece_hash(&mut board.zobrist, mover, to);
     }
     // update castle rights
     board.set_castling_rights(CastlingRights(
         board.castling_rights().0 & (CASTLING_MASK[from as usize] & CASTLING_MASK[to as usize]),
     ));
+    // update hash
+    hasher.update_state_hash(board);
     undo_move
 }
 pub fn undo_move<S: Side + Castle + Evaluation>(mv: Move, board: &mut Board, undo: Undo) {
@@ -268,6 +293,7 @@ pub fn undo_move<S: Side + Castle + Evaluation>(mv: Move, board: &mut Board, und
     let move_type = mv.move_type();
     let move_mask = (1u64 << from as u8) | (1u64 << to as u8);
     let mover = board.get_piece_at_square(to).expect("has to exist");
+    let hasher = ZobristHasher::get_hasher();
     if let Some(promotion) = mv.promotion_to() {
         board.pieces[color as usize][promotion as usize].0 ^= 1u64 << to as u8;
         board.pieces[color as usize][PieceType::Pawn as usize].0 ^= 1u64 << from as u8;
@@ -281,6 +307,8 @@ pub fn undo_move<S: Side + Castle + Evaluation>(mv: Move, board: &mut Board, und
         board.subtract_score::<S>(to, mover); // - val of old square
         board.set_piece_at_square(to, None);
         board.set_piece_at_square(from, Some(new_piece));
+        hasher.update_piece_hash(&mut board.zobrist, new_piece, from); // delete promoted piece
+        hasher.update_piece_hash(&mut board.zobrist, mover, to); // add the old pawn
     } else {
         let rook = Piece {
             piece_type: PieceType::Rook,
@@ -296,6 +324,8 @@ pub fn undo_move<S: Side + Castle + Evaluation>(mv: Move, board: &mut Board, und
                 board.set_piece_at_square(S::QUEEN_SIDE_ROOK_POS, None);
                 board.subtract_score::<S>(S::QUEEN_SIDE_ROOK_POS, rook); // + val of rook new square
                 board.add_score::<S>(S::QUEEN_ROOK_START_POS, rook); // - val of starting rook square
+                hasher.update_piece_hash(&mut board.zobrist, rook, from);
+                hasher.update_piece_hash(&mut board.zobrist, rook, to);
             }
             MoveType::KingSideCastle => {
                 let mask =
@@ -306,6 +336,8 @@ pub fn undo_move<S: Side + Castle + Evaluation>(mv: Move, board: &mut Board, und
                 board.set_piece_at_square(S::KING_SIDE_ROOK_POS, None);
                 board.subtract_score::<S>(S::KING_SIDE_ROOK_POS, rook); // + val of rook new square
                 board.add_score::<S>(S::KING_ROOK_START_POS, rook); // - val of starting rook square
+                hasher.update_piece_hash(&mut board.zobrist, rook, from);
+                hasher.update_piece_hash(&mut board.zobrist, rook, to);
             }
             _ => {}
         };
@@ -313,6 +345,8 @@ pub fn undo_move<S: Side + Castle + Evaluation>(mv: Move, board: &mut Board, und
         board.occupied_by_color[color as usize].0 ^= move_mask;
         board.set_piece_at_square(from, Some(mover));
         board.set_piece_at_square(to, None);
+        hasher.update_piece_hash(&mut board.zobrist, mover, from);
+        hasher.update_piece_hash(&mut board.zobrist, mover, to);
         board.add_score::<S>(from, mover);
         board.subtract_score::<S>(to, mover);
     }
@@ -328,16 +362,17 @@ pub fn undo_move<S: Side + Castle + Evaluation>(mv: Move, board: &mut Board, und
             to
         };
         let cap_mask = 1u64 << (piece_pos as u8);
-        //TODO: fix en passant
         board.occupied_by_color[opposite_color as usize].0 ^= cap_mask;
         board.pieces[opposite_color as usize][captured.piece_type as usize].0 ^= cap_mask;
         board.phase += PestoEvaluation::PIECE_PHASE_INCR[captured.piece_type as usize]; // - phase of captured
         board.add_score::<S::Opposite>(piece_pos, captured);
         board.set_piece_at_square(piece_pos, Some(captured));
+        hasher.update_piece_hash(&mut board.zobrist, captured, piece_pos);
     }
 
     board.set_castling_rights(undo.castling_rights);
     board.set_en_passant_square(undo.previous_ep_square);
+    hasher.update_state_hash(board);
 }
 
 mod tests {
@@ -386,7 +421,7 @@ mod tests {
     fn test_white_kingside_castling() {
         // Setup
         let mut board =
-            Board::from_FEN("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1".to_string());
+            Board::from_fen("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1".to_string());
         let mv = Move::new(Square::E1, Square::G1, MoveType::KingSideCastle);
         let original_board = board.clone();
 
@@ -471,7 +506,7 @@ mod debug_tests {
     #[test]
     fn test_castle() {
         let mut board =
-            Board::from_FEN("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1".to_string());
+            Board::from_fen("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1".to_string());
         println!("{}", board);
         let move_generator = MoveGenerator::default();
         let mut move_list = MoveList::default();

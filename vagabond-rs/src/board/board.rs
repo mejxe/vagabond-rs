@@ -7,6 +7,7 @@ use std::{
 use crate::{
     ai::evaluation::{Evaluation, PestoEvaluation},
     board::bitboard::{BitBoard, Square},
+    tt::zobrist::{ZOBRIST_HASHER, ZobristHash, ZobristHasher},
 };
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
@@ -51,6 +52,7 @@ pub struct Board {
     // index with [Piece as usize] (same order as Piece)
     pub pieces: [[BitBoard; 6]; 2],
 
+    pub side_to_move: Color,
     castling_rights: CastlingRights,
     en_passant_square: Option<Square>,
 
@@ -59,7 +61,7 @@ pub struct Board {
     pub eg_score: i16,
     pub phase: i16,
 
-    pub side_to_move: Color,
+    pub zobrist: ZobristHash,
 }
 impl Board {
     const fn fill_mailbox() -> [Option<Piece>; 64] {
@@ -193,6 +195,12 @@ impl Board {
             }
         }
         let (mg_score, eg_score, phase) = Board::evaluate_whole_board(mailbox);
+        let zobrist = ZobristHasher::get_hasher().calculate_board_hash(
+            &mailbox,
+            castling_rights,
+            en_passant_square,
+            curr_move,
+        );
         Board {
             mailbox,
             occupied_by_color,
@@ -203,9 +211,10 @@ impl Board {
             eg_score,
             phase,
             side_to_move: curr_move,
+            zobrist,
         }
     }
-    pub fn from_FEN(fen_string: String) -> Board {
+    pub fn from_fen(fen_string: String) -> Board {
         let mut mailbox: [Option<Piece>; 64] = [None; 64];
         let mut iter = fen_string.split_ascii_whitespace();
         let placements = iter.next().expect("Not enough parts");
@@ -392,7 +401,7 @@ mod tests {
     fn test_starting_position_parsing() {
         // Arrange
         let board =
-            Board::from_FEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".to_string());
+            Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".to_string());
 
         // Act & Assert
         let white_pawns = board.get_pieces(PieceType::Pawn, Color::White);
@@ -412,12 +421,12 @@ mod tests {
     fn test_evaluation() {
         // Arrange
         let board =
-            Board::from_FEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".to_string());
+            Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".to_string());
 
         // Act & Assert
         assert_eq!(board.evaluate(), 0);
         let board =
-            Board::from_FEN("rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".to_string());
+            Board::from_fen("rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".to_string());
         assert_eq!(board.evaluate(), 992);
     }
 }
@@ -440,7 +449,7 @@ mod debug_tests {
     #[test]
     #[ignore]
     fn ep_from_FEN() {
-        let ep = Board::from_FEN(
+        let ep = Board::from_fen(
             "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq e3 0 3".to_string(),
         );
         println!("{}", ep.all_occupied());
@@ -450,7 +459,7 @@ mod debug_tests {
     }
     #[test]
     fn kiwipete_from_FEN() {
-        let b = Board::from_FEN(
+        let b = Board::from_fen(
             "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1".to_string(),
         );
         println!("{}", b.all_occupied());
@@ -460,7 +469,7 @@ mod debug_tests {
     }
     #[test]
     fn evaluate_position_test() {
-        let b = Board::from_FEN(
+        let b = Board::from_fen(
             "r3k2r/p2pqpb1/bnpPpnp1/4N3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 2".to_string(),
         );
         println!("{}", b.evaluate());

@@ -76,7 +76,7 @@ impl Parser {
                 };
                 moves_offset = 6;
                 dbg!(format!("{pieces} {side_to_move} {castling} {ep} {hf} {fm}"));
-                Board::from_FEN(format!("{pieces} {side_to_move} {castling} {ep} {hf} {fm}"))
+                Board::from_fen(format!("{pieces} {side_to_move} {castling} {ep} {hf} {fm}"))
             }
             _ => return None,
         };

@@ -1,4 +1,10 @@
-use std::{char::MAX, f32::MIN, i16, sync::atomic::Ordering, time::Instant};
+use std::{
+    char::MAX,
+    f32::MIN,
+    i16,
+    sync::{Arc, Mutex, atomic::Ordering},
+    time::Instant,
+};
 
 use crate::{
     ai::evaluation::Evaluation,
@@ -13,6 +19,7 @@ use crate::{
         move_structs::{ExtMove, Move},
         traits::{Black, Castle, PawnDirection, Side, White},
     },
+    tt::transposition_table::{NodeType, TT, TTEntry},
     uci::handler::StopFlag,
 };
 
@@ -27,6 +34,7 @@ pub struct AI<T: TimeLimit> {
     nodes_searched: u32,
     move_generator: MoveGenerator,
     pub pv_table: PvArray,
+    tt: Arc<Mutex<TT>>,
 }
 impl<T: TimeLimit> AI<T> {
     pub fn new(
@@ -35,6 +43,7 @@ impl<T: TimeLimit> AI<T> {
         time_limit: T,
         nodes_searched: u32,
         move_generator: MoveGenerator,
+        tt: Arc<Mutex<TT>>,
     ) -> Self {
         Self {
             aborted,
@@ -44,6 +53,7 @@ impl<T: TimeLimit> AI<T> {
             nodes_searched,
             move_generator,
             pv_table: PvArray::new(),
+            tt,
         }
     }
     pub fn reset_fields(&mut self) {
@@ -63,6 +73,16 @@ impl<T: TimeLimit> AI<T> {
         let mut move_list = MoveList::default();
         let mut alpha = max;
         let beta = -alpha;
+        let passdown_tt = Arc::clone(&self.tt);
+        let mut tt = passdown_tt.lock().unwrap();
+        if let Some(entry) = tt.get(board.zobrist) {
+            dbg!("tt hit");
+            if *entry.node_type() == NodeType::Exact {
+                return (Some(entry.best_move()), entry.score());
+            } else if *entry.node_type() == NodeType::Lowerbound && entry.score() >= beta {
+                return (Some(entry.best_move()), entry.score());
+            }
+        }
         self.move_generator.generate_moves(&mut move_list, board);
         move_list.score_moves(board, 0, &self.killer_moves, &self.pv_table);
         let moves = move_list.move_fetcher();
@@ -83,6 +103,7 @@ impl<T: TimeLimit> AI<T> {
                         -beta,
                         -alpha,
                         current_depth,
+                        &mut tt,
                     ),
                     Color::Black => -self.nega_max::<White>(
                         current_depth - 1,
@@ -90,6 +111,7 @@ impl<T: TimeLimit> AI<T> {
                         -beta,
                         -alpha,
                         current_depth,
+                        &mut tt,
                     ),
                 };
 
@@ -100,7 +122,7 @@ impl<T: TimeLimit> AI<T> {
                 };
                 alpha = i16::max(alpha, max);
             }
-            undo_move_non_generic(board, mv.mv, undo, board.side_to_move);
+            undo_move_non_generic(board, mv.mv, undo);
         }
         return (best_mv, max);
     }
@@ -111,6 +133,7 @@ impl<T: TimeLimit> AI<T> {
         mut alpha: i16,
         beta: i16,
         max_depth: u8,
+        tt: &mut TT,
     ) -> i16 {
         if self.aborted {
             return 0;
@@ -121,12 +144,24 @@ impl<T: TimeLimit> AI<T> {
                 return 0;
             };
         };
+        // probe tt
+        if let Some(entry) = tt.get(board.zobrist) {
+            if *entry.node_type() == NodeType::Exact {
+                return entry.score();
+            } else if *entry.node_type() == NodeType::Lowerbound && entry.score() >= beta {
+                return entry.score();
+            }
+        }
+
         if depth == 0 {
             return self.quiescence_search::<S>(board, alpha, beta);
-            //return board.evaluate() * S::MULTIPLIER;
         }
         let mut best_score = i16::MIN;
+        let mut best_move: Option<Move> = None;
         let ply = max_depth - depth;
+
+        // reset the pv array slots
+        self.pv_table.new_node(ply);
 
         let mut move_list = MoveList::default();
 
@@ -141,9 +176,10 @@ impl<T: TimeLimit> AI<T> {
             if !self.move_generator.is_king_in_check(board, S::COLOR) {
                 legal_moves += 1;
                 let score =
-                    -self.nega_max::<S::Opposite>(depth - 1, board, -beta, -alpha, max_depth);
+                    -self.nega_max::<S::Opposite>(depth - 1, board, -beta, -alpha, max_depth, tt);
                 if score > best_score {
                     best_score = score;
+                    best_move = Some(mv.mv);
                 }
 
                 if score >= beta {
@@ -154,12 +190,19 @@ impl<T: TimeLimit> AI<T> {
                         }
                     }
                     undo_move::<S>(mv.mv, board, undo);
-                    return best_score;
+                    tt.put(TTEntry::new(
+                        mv.mv,
+                        NodeType::Lowerbound,
+                        board.zobrist,
+                        depth,
+                        score,
+                    ));
+                    return score;
                 }
-                if best_score > alpha {
-                    alpha = best_score;
-                    self.pv_table.put_pv(ply, mv.mv);
-                }
+            }
+            if best_score > alpha {
+                alpha = best_score;
+                self.pv_table.put_pv(ply, mv.mv);
             }
             undo_move::<S>(mv.mv, board, undo);
         }
@@ -168,6 +211,13 @@ impl<T: TimeLimit> AI<T> {
         } else if legal_moves == 0 {
             return 0;
         }
+        tt.put(TTEntry::new(
+            best_move.unwrap_or_default(),
+            NodeType::Exact,
+            board.zobrist,
+            depth,
+            best_score,
+        ));
         return best_score;
     }
     fn quiescence_search<S: Side + Castle + PawnDirection + Evaluation>(
@@ -251,38 +301,34 @@ const MAX_DEPTH_NUM: u8 = 15;
 #[derive(Clone, Copy, Debug)]
 pub struct PvArray {
     moves: [Option<Move>; ((MAX_DEPTH_NUM * MAX_DEPTH_NUM + MAX_DEPTH_NUM) / 2) as usize],
+    lengths: [u8; 15],
 }
 impl PvArray {
     pub fn new() -> PvArray {
+        let lengths = [0; 15];
         PvArray {
             moves: [None; ((MAX_DEPTH_NUM * MAX_DEPTH_NUM + MAX_DEPTH_NUM) / 2) as usize],
+            lengths,
         }
     }
     pub fn get_pv_index(ply: u8) -> usize {
         let index = MAX_DEPTH_NUM * ply - (ply * (ply.saturating_sub(1))) / 2;
         index as usize
     }
+    pub fn new_node(&mut self, ply: u8) {
+        self.lengths[ply as usize] = 0;
+    }
     pub fn put_pv(&mut self, ply: u8, mv: Move) {
         let current_index = PvArray::get_pv_index(ply);
         self.moves[current_index] = Some(mv);
         let next_index = PvArray::get_pv_index(ply + 1);
-        for i in 0..(MAX_DEPTH_NUM - ply - 1) {
+        for i in 0..(self.lengths[ply as usize + 1]) {
             self.moves[current_index + 1 + i as usize] = self.moves[next_index + i as usize];
         }
+        self.lengths[ply as usize] = self.lengths[ply as usize + 1] + 1;
     }
     pub fn get_pv(&self) -> &[Option<Move>] {
-        // TODO: Rewrite to an array of max_depth_num
-        let index = {
-            let mut i = 0;
-            for _ in 0..MAX_DEPTH_NUM {
-                if self.moves[i as usize].is_none() {
-                    break;
-                };
-                i += 1;
-            }
-            i
-        };
-        &self.moves[0..index as usize]
+        &self.moves[0..self.lengths[0] as usize]
     }
     #[inline(always)]
     pub fn get_move(&self, index: usize) -> Option<Move> {
@@ -309,51 +355,51 @@ mod tests {
 
     use super::AI;
 
-    #[test]
-    fn nega_max_test() {
-        //let mut board = Board::default();
-        let mut board = Board::from_FEN(
-            "r1bq2r1/b4pk1/p1pp1p2/1p2pP2/1P2P1PB/3P4/1PPQ2P1/R3K2R w KQ - 0 1".to_string(),
-        );
-        let mvg = MoveGenerator::default();
-        let stop_flag = Arc::new(AtomicBool::new(false));
-        let nodes = 0;
-        let time_limit = NoLimit;
-        let mut ai = AI::new(false, stop_flag, time_limit, nodes, mvg);
-        let (move_made, _) = ai.make_decision(2, &mut board, None);
-        make_move::<White>(&mut board, move_made.unwrap());
-        board.side_to_move = board.side_to_move ^ 1;
-        println!("{:?}", move_made.unwrap());
-        println!("{}", board);
-        assert!(false)
-    }
-    #[test]
-    fn nega_max_mate_test() {
-        let stop_flag = Arc::new(AtomicBool::new(false));
-        let nodes = 0;
-        let mut board = Board::from_FEN(
-            "r1bq2r1/b4pk1/p1pp1p2/1p2pP2/1P2P1PB/3P4/1PPQ2P1/R3K2R w KQ - 0 1".to_string(),
-        );
-        println! {"{}", board};
-        let mvg = MoveGenerator::default();
-        let time_limit = NoLimit;
-        let mut ai = AI::new(false, stop_flag, time_limit, nodes, mvg.clone());
-        let (move_made, _) = ai.make_decision(4, &mut board, None);
-        println!("{:?}", move_made.unwrap());
-        make_move::<White>(&mut board, move_made.unwrap());
-        println! {"{}", board};
-        board.side_to_move = board.side_to_move ^ 1;
-        ai.reset_fields();
-        let (move_made, _) = ai.make_decision(4, &mut board, None);
-        println!("{:?}", move_made.unwrap());
-        make_move::<Black>(&mut board, move_made.unwrap());
-        println! {"{}", board};
-        board.side_to_move = board.side_to_move ^ 1;
-        ai.reset_fields();
-        let (move_made, _) = ai.make_decision(4, &mut board, None);
-        make_move::<White>(&mut board, move_made.unwrap());
-        println!("{:?}", move_made.unwrap());
-        println! {"{}", board};
-        assert!(false)
-    }
+    // #[test]
+    // fn nega_max_test() {
+    //     //let mut board = Board::default();
+    //     let mut board = Board::from_fen(
+    //         "r1bq2r1/b4pk1/p1pp1p2/1p2pP2/1P2P1PB/3P4/1PPQ2P1/R3K2R w KQ - 0 1".to_string(),
+    //     );
+    //     let mvg = MoveGenerator::default();
+    //     let stop_flag = Arc::new(AtomicBool::new(false));
+    //     let nodes = 0;
+    //     let time_limit = NoLimit;
+    //     let mut ai = AI::new(false, stop_flag, time_limit, nodes, mvg);
+    //     let (move_made, _) = ai.make_decision(2, &mut board, None);
+    //     make_move::<White>(&mut board, move_made.unwrap());
+    //     board.side_to_move = board.side_to_move ^ 1;
+    //     println!("{:?}", move_made.unwrap());
+    //     println!("{}", board);
+    //     assert!(false)
+    // }
+    // #[test]
+    // fn nega_max_mate_test() {
+    //     let stop_flag = Arc::new(AtomicBool::new(false));
+    //     let nodes = 0;
+    //     let mut board = Board::from_fen(
+    //         "r1bq2r1/b4pk1/p1pp1p2/1p2pP2/1P2P1PB/3P4/1PPQ2P1/R3K2R w KQ - 0 1".to_string(),
+    //     );
+    //     println! {"{}", board};
+    //     let mvg = MoveGenerator::default();
+    //     let time_limit = NoLimit;
+    //     let mut ai = AI::new(false, stop_flag, time_limit, nodes, mvg.clone());
+    //     let (move_made, _) = ai.make_decision(4, &mut board, None);
+    //     println!("{:?}", move_made.unwrap());
+    //     make_move::<White>(&mut board, move_made.unwrap());
+    //     println! {"{}", board};
+    //     board.side_to_move = board.side_to_move ^ 1;
+    //     ai.reset_fields();
+    //     let (move_made, _) = ai.make_decision(4, &mut board, None);
+    //     println!("{:?}", move_made.unwrap());
+    //     make_move::<Black>(&mut board, move_made.unwrap());
+    //     println! {"{}", board};
+    //     board.side_to_move = board.side_to_move ^ 1;
+    //     ai.reset_fields();
+    //     let (move_made, _) = ai.make_decision(4, &mut board, None);
+    //     make_move::<White>(&mut board, move_made.unwrap());
+    //     println!("{:?}", move_made.unwrap());
+    //     println! {"{}", board};
+    //     assert!(false)
+    // }
 }

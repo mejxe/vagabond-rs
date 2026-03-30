@@ -20,15 +20,25 @@ use vagabond_rs::{
 };
 
 fn main() -> Result<(), ()> {
+    //engine init
     let mut engine = Engine::default();
     let stop_flag = Arc::new(AtomicBool::new(false));
+
+    // comms init
     let (tx_in, rx_in) = channel::<UciIn>();
     let (tx_out, rx_out) = channel::<UciOut>();
     engine.set_tx(tx_out.clone());
+
+    //handler init
     let mut handler = Handler::new(engine, rx_in, tx_out, stop_flag.clone());
+
     let std_in = BufReader::new(io::stdin());
+
+    //engine and uci out threads
     std::thread::spawn(move || handler.handle());
     std::thread::spawn(move || Communication::broadcast(rx_out));
+
+    // main loop
     Communication::communication_loop(std_in, tx_in, stop_flag.clone())
 }
 mod tests {
@@ -36,11 +46,11 @@ mod tests {
 
     #[test]
     fn test_perft() {
-        let mut board = Board::from_FEN(
+        let mut board = Board::from_fen(
             "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - ".to_string(),
         ); // kiwipete
-        let mut board = Board::from_FEN("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1 ".to_string()); // pos 3 cpw
-        let mut board = Board::from_FEN(
+        let mut board = Board::from_fen("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1 ".to_string()); // pos 3 cpw
+        let mut board = Board::from_fen(
             "r1bq2r1/b4pk1/p1pp1p2/1p2pP2/1P2P1PB/3P4/1PPQ2P1/R3K2R w KQ - 0 1".to_string(),
         ); //tricky pos
         let mut board = Board::default();
@@ -51,7 +61,7 @@ mod tests {
     #[ignore]
     #[test]
     fn test_nega_max() {
-        let board = Board::from_FEN(
+        let board = Board::from_fen(
             "r2q1rk1/1p1bbppp/p2pbn2/4p3/4P3/1NN1BP2/PPPQ2PP/R3KB1R w KQ - 4 11".to_string(),
         );
         println!("{}", board);

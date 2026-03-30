@@ -36,7 +36,7 @@ impl Index<PieceType> for [BitBoard; 6] {
 }
 impl Default for Board {
     fn default() -> Self {
-        Board::from_FEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".to_string())
+        Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1".to_string())
     }
 }
 impl Display for Board {
@@ -57,10 +57,11 @@ impl Display for Board {
         }
         board.push_str("\n   A  B  C  D  E  F  G  H \n");
         board.push_str(&format!(
-            "\n castling: {} | en_passant_square = {:?}",
+            "\n castling: {} | en_passant_square = {:?}\n",
             self.castling_rights(),
             self.en_passant_square()
         ));
+        board.push_str(&format!("hash: {}", self.zobrist));
         write!(f, "{}", board)
     }
 }

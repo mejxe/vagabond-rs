@@ -3,6 +3,7 @@ pub mod board;
 pub mod engine;
 pub mod moves;
 pub mod performance;
+pub mod tt;
 pub mod uci;
 
 fn format_with_commas(n: u64) -> String {
