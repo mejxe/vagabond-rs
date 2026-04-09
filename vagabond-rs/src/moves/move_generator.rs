@@ -1,7 +1,6 @@
 use std::{arch::x86_64::_pext_u64, fmt::Display, path::Iter};
 
 use crate::{
-    ai::ai::PvArray,
     board::{
         bitboard::{self, BitBoard, Square},
         board::{Board, CastlingRights, Color, Piece, PieceType},
@@ -63,13 +62,13 @@ impl MoveList {
         board: &Board,
         ply: u8,
         killers: &[[Option<Move>; 2]; 64],
-        pv: &PvArray,
+        tt_move: Option<Move>,
     ) {
+        // score every move in order: TT > MVV_LVA captures > killer moves TODO: History moves
         for mv in self.moves[..self.count].iter_mut() {
-            let index = PvArray::get_pv_index(ply);
-            if let Some(pv) = pv.get_move(index) {
+            if let Some(pv) = tt_move {
                 if mv.mv == pv {
-                    mv.score = 50000;
+                    mv.score = 15000;
                     continue;
                 }
             }
@@ -478,6 +477,30 @@ impl MoveGenerator {
             Color::White => self.is_square_attacked::<White>(board, king),
             Color::Black => self.is_square_attacked::<Black>(board, king),
         }
+    }
+    #[inline(always)]
+    pub fn is_pseudo_legal(board: &Board, mv: Move) -> bool {
+        let mover = match board.get_piece_at_square(mv.from()) {
+            Some(p) => p,
+            None => return false,
+        };
+
+        if mover.color != board.side_to_move {
+            return false;
+        }
+
+        let target = board.get_piece_at_square(mv.to());
+        if let Some(target) = target {
+            if target.color == mover.color {
+                return false;
+            };
+        }
+        if mv.move_type().is_capture() && target.is_none() {
+            if mv.move_type() != MoveType::EnPassant {
+                return false;
+            }
+        }
+        return true;
     }
     #[inline(always)]
     pub fn is_square_attacked<S: Side>(&self, board: &Board, sq: Square) -> bool {

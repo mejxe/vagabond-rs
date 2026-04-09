@@ -1,7 +1,7 @@
 use std::time::Instant;
 
-pub mod ai;
 pub mod evaluation;
+pub mod negamax;
 
 // TRAITS
 pub trait TimeLimit {

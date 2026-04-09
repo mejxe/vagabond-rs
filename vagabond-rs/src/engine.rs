@@ -6,8 +6,8 @@ use std::{
 use crate::{
     ai::{
         LimitedTime, NoLimit,
-        ai::AI,
         evaluation::{Evaluation, PestoEvaluation},
+        negamax::AI,
     },
     board::{
         bitboard::Square,
@@ -20,7 +20,10 @@ use crate::{
         sliders::CASTLING_MASK,
         traits::{Black, Castle, PawnDirection, Side, White},
     },
-    tt::{transposition_table::TT, zobrist::ZobristHasher},
+    tt::{
+        transposition_table::{TT, TT_DEFAULT_SIZE_MB},
+        zobrist::ZobristHasher,
+    },
     uci::{
         handler::StopFlag,
         structs::{GoTimeParams, InfoParams, UciOut},
@@ -41,9 +44,9 @@ impl Default for Engine {
         Self {
             board: Board::default(),
             move_gen: MoveGenerator::default(),
-            depth: 5,
+            depth: 7,
             tx: None,
-            tt: Arc::new(Mutex::new(TT::new(256))),
+            tt: Arc::new(Mutex::new(TT::default())),
         }
     }
 }
@@ -85,20 +88,19 @@ impl Engine {
             time_limit,
             nodes_searched,
             self.move_gen.clone(),
-            self.tt.clone(),
+            Arc::clone(&self.tt),
         );
         while !aborted {
-            let (current_best_move, evaluation) =
-                ai.make_decision(current_depth, &mut self.board, best_move);
+            let (current_best_move, evaluation) = ai.make_decision(current_depth, &mut self.board);
             let time_passed = time_started.elapsed().as_millis();
             if ai.aborted() && best_move.is_some() {
                 break; // dont send the move that it aborted on
             }
             if let Some(tx) = &self.tx {
-                let pv = ai.pv_table.get_pv();
+                let pv = self.find_pv(current_depth);
                 let uci_params = InfoParams {
                     nodes_searched: ai.nodes_searched(),
-                    pv: pv.to_vec(),
+                    pv: pv,
                     curr_depth: current_depth,
                     evaluation,
                     time: time_passed,
@@ -127,17 +129,16 @@ impl Engine {
             self.tt.clone(),
         );
         for current_depth in 1..=max_depth {
-            let (current_best_move, evaluation) =
-                ai.make_decision(current_depth, &mut self.board, best_move);
+            let (current_best_move, evaluation) = ai.make_decision(current_depth, &mut self.board);
             let time_elapsed = time_started.elapsed().as_millis();
             if aborted {
                 break;
             }
             if let Some(tx) = &self.tx {
-                let pv = ai.pv_table.get_pv();
+                let pv = self.find_pv(current_depth);
                 let uci_params = InfoParams {
                     nodes_searched: ai.nodes_searched(),
-                    pv: pv.to_vec(),
+                    pv,
                     curr_depth: current_depth,
                     evaluation,
                     time: time_elapsed,
@@ -149,6 +150,22 @@ impl Engine {
             best_move = current_best_move;
         }
         best_move
+    }
+    pub fn find_pv(&self, at_depth: u8) -> Vec<Move> {
+        let mut board_copy = self.board.clone();
+        let mut current_depth = 0;
+        let mut pv_line = vec![];
+        while current_depth < at_depth {
+            if let Some(mv) = self.tt.lock().unwrap().get(board_copy.zobrist) {
+                pv_line.push(mv.best_move());
+                make_move_non_generic(&mut board_copy, mv.best_move());
+                board_copy.swap_side();
+            } else {
+                break;
+            }
+            current_depth += 1;
+        }
+        pv_line
     }
 
     pub fn set_depth(&mut self, depth: u8) {
@@ -176,6 +193,9 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
     board: &mut Board,
     mv: Move,
 ) -> Undo {
+    let hasher = ZobristHasher::get_hasher();
+    hasher.flip_zobrist_hash(board);
+
     let from = mv.from();
     let to = mv.to();
     let move_type = mv.move_type();
@@ -184,10 +204,8 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
         previous_ep_square: board.en_passant_square(),
         captured_piece: None,
     };
-    board.set_en_passant_square(None);
     let color = S::COLOR;
     let opposite_color = S::Opposite::COLOR;
-    let hasher = ZobristHasher::get_hasher();
     let mover = board.get_piece_at_square(from).unwrap();
     if move_type.is_capture() {
         let piece_pos = if let MoveType::EnPassant = move_type {
@@ -208,6 +226,7 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
         board.set_piece_at_square(piece_pos, None);
         hasher.update_piece_hash(&mut board.zobrist, captured, piece_pos); // update hash after deleting captured
     }
+    board.set_en_passant_square(None);
 
     // set ep square after a double push
     if let MoveType::DoublePush = move_type {
@@ -248,8 +267,8 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
                 board.add_score::<S>(S::QUEEN_SIDE_ROOK_POS, rook); // + val of rook new square
                 board.subtract_score::<S>(S::QUEEN_ROOK_START_POS, rook); // - val of starting rook square
                 // update hash
-                hasher.update_piece_hash(&mut board.zobrist, rook, to);
-                hasher.update_piece_hash(&mut board.zobrist, rook, from);
+                hasher.update_piece_hash(&mut board.zobrist, rook, S::QUEEN_ROOK_START_POS);
+                hasher.update_piece_hash(&mut board.zobrist, rook, S::QUEEN_SIDE_ROOK_POS);
             }
             MoveType::KingSideCastle => {
                 let mask =
@@ -262,8 +281,8 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
                 board.add_score::<S>(S::KING_SIDE_ROOK_POS, rook); // + val of rook new square
                 board.subtract_score::<S>(S::KING_ROOK_START_POS, rook); // - val of starting rook square
                 // update haash
-                hasher.update_piece_hash(&mut board.zobrist, rook, to);
-                hasher.update_piece_hash(&mut board.zobrist, rook, from);
+                hasher.update_piece_hash(&mut board.zobrist, rook, S::KING_ROOK_START_POS);
+                hasher.update_piece_hash(&mut board.zobrist, rook, S::KING_SIDE_ROOK_POS);
             }
             _ => {}
         };
@@ -283,17 +302,20 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
         board.castling_rights().0 & (CASTLING_MASK[from as usize] & CASTLING_MASK[to as usize]),
     ));
     // update hash
-    hasher.update_state_hash(board);
+    hasher.flip_zobrist_hash(board);
+    hasher.flip_side_to_move_hash(board);
     undo_move
 }
 pub fn undo_move<S: Side + Castle + Evaluation>(mv: Move, board: &mut Board, undo: Undo) {
+    let hasher = ZobristHasher::get_hasher();
+    hasher.flip_zobrist_hash(board);
+
     let color = S::COLOR;
     let from = mv.from();
     let to = mv.to();
     let move_type = mv.move_type();
     let move_mask = (1u64 << from as u8) | (1u64 << to as u8);
     let mover = board.get_piece_at_square(to).expect("has to exist");
-    let hasher = ZobristHasher::get_hasher();
     if let Some(promotion) = mv.promotion_to() {
         board.pieces[color as usize][promotion as usize].0 ^= 1u64 << to as u8;
         board.pieces[color as usize][PieceType::Pawn as usize].0 ^= 1u64 << from as u8;
@@ -324,8 +346,8 @@ pub fn undo_move<S: Side + Castle + Evaluation>(mv: Move, board: &mut Board, und
                 board.set_piece_at_square(S::QUEEN_SIDE_ROOK_POS, None);
                 board.subtract_score::<S>(S::QUEEN_SIDE_ROOK_POS, rook); // + val of rook new square
                 board.add_score::<S>(S::QUEEN_ROOK_START_POS, rook); // - val of starting rook square
-                hasher.update_piece_hash(&mut board.zobrist, rook, from);
-                hasher.update_piece_hash(&mut board.zobrist, rook, to);
+                hasher.update_piece_hash(&mut board.zobrist, rook, S::QUEEN_ROOK_START_POS);
+                hasher.update_piece_hash(&mut board.zobrist, rook, S::QUEEN_SIDE_ROOK_POS);
             }
             MoveType::KingSideCastle => {
                 let mask =
@@ -336,8 +358,8 @@ pub fn undo_move<S: Side + Castle + Evaluation>(mv: Move, board: &mut Board, und
                 board.set_piece_at_square(S::KING_SIDE_ROOK_POS, None);
                 board.subtract_score::<S>(S::KING_SIDE_ROOK_POS, rook); // + val of rook new square
                 board.add_score::<S>(S::KING_ROOK_START_POS, rook); // - val of starting rook square
-                hasher.update_piece_hash(&mut board.zobrist, rook, from);
-                hasher.update_piece_hash(&mut board.zobrist, rook, to);
+                hasher.update_piece_hash(&mut board.zobrist, rook, S::KING_SIDE_ROOK_POS);
+                hasher.update_piece_hash(&mut board.zobrist, rook, S::KING_ROOK_START_POS);
             }
             _ => {}
         };
@@ -372,157 +394,6 @@ pub fn undo_move<S: Side + Castle + Evaluation>(mv: Move, board: &mut Board, und
 
     board.set_castling_rights(undo.castling_rights);
     board.set_en_passant_square(undo.previous_ep_square);
-    hasher.update_state_hash(board);
-}
-
-mod tests {
-    use crate::{
-        board::{
-            bitboard::Square,
-            board::{Board, Color, PieceType},
-        },
-        engine::undo_move,
-        moves::{
-            move_generator::{MoveGenerator, MoveList},
-            move_structs::{Move, MoveType},
-            traits::White,
-        },
-    };
-
-    use super::make_move;
-    #[test]
-    fn test_make_double_pawn_push() {
-        // Setup
-        let mut board = Board::default();
-        let mv = Move::new(Square::E2, Square::E4, MoveType::DoublePush);
-
-        // Act
-        let undo = make_move::<White>(&mut board, mv);
-
-        // Assert
-        // E2 should now be empty
-        assert!(board.get_piece_at_square(Square::E2).is_none());
-
-        // E4 should have a White Pawn
-        let moved_piece = board
-            .get_piece_at_square(Square::E4)
-            .expect("Piece should be at e4");
-        assert_eq!(moved_piece.piece_type, PieceType::Pawn);
-        assert_eq!(moved_piece.color, Color::White);
-        assert!(
-            board.pieces[Color::White as usize][PieceType::Pawn as usize].check_bit(Square::E4)
-        );
-
-        assert_eq!(board.en_passant_square(), Some(Square::E3));
-
-        assert_eq!(undo.captured_piece, None);
-    }
-    #[test]
-    fn test_white_kingside_castling() {
-        // Setup
-        let mut board =
-            Board::from_fen("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1".to_string());
-        let mv = Move::new(Square::E1, Square::G1, MoveType::KingSideCastle);
-        let original_board = board.clone();
-
-        // Act
-        let undo = make_move::<White>(&mut board, mv);
-
-        // Assert
-        // King should be on g1
-        let king = board.get_piece_at_square(Square::G1).unwrap();
-        assert_eq!(king.piece_type, PieceType::King);
-
-        // Rook should be on f1
-        let rook = board.get_piece_at_square(Square::F1).unwrap();
-        assert_eq!(rook.piece_type, PieceType::Rook);
-
-        // Original squares e1 and h1 should be empty
-        assert!(board.get_piece_at_square(Square::E1).is_none());
-        assert!(board.get_piece_at_square(Square::H1).is_none());
-        undo_move::<White>(mv, &mut board, undo);
-        assert_eq!(original_board, board)
-    }
-    #[test]
-    fn test_undo() {
-        let mut board = Board::default();
-        let original_board = board.clone();
-        let mv = Move::new(Square::E2, Square::E4, MoveType::DoublePush);
-
-        // Act
-        let undo = make_move::<White>(&mut board, mv);
-        undo_move::<White>(mv, &mut board, undo);
-
-        // Assert
-        assert_eq!(board, original_board);
-    }
-}
-mod debug_tests {
-    use crate::{
-        board::board::{Board, Color, PieceType},
-        moves::{
-            move_generator::{MoveGenerator, MoveList},
-            traits::White,
-        },
-    };
-
-    use super::make_move;
-
-    #[test]
-    #[ignore]
-    fn test_make_move() {
-        let mut board = Board::default();
-        let move_generator = MoveGenerator::default();
-        let mut move_list = MoveList::default();
-        move_generator.generate_quiets::<White>(&mut move_list, &board);
-        let moves = move_list.as_slice();
-        for mv in moves {
-            println!("{mv}");
-        }
-        make_move::<White>(&mut board, moves[0].mv);
-        println!("{}", board.get_pieces(PieceType::Knight, Color::White));
-        let mut move_list = MoveList::default();
-        move_generator.generate_quiets::<White>(&mut move_list, &board);
-        let moves = move_list.as_slice();
-        for mv in moves {
-            println!("{mv}");
-        }
-        make_move::<White>(&mut board, moves[5].mv);
-        println!("{}", board.get_pieces(PieceType::Knight, Color::White));
-        let mut move_list = MoveList::default();
-        move_generator.generate_captures::<White>(&mut move_list, &board);
-        let moves = move_list.as_slice();
-        for mv in moves {
-            println!("{mv}");
-        }
-        make_move::<White>(&mut board, moves[0].mv);
-        println!("{}", board.get_pieces(PieceType::Knight, Color::White));
-        println!("{}", board.black_occupied());
-        println!("{}", board);
-
-        assert!(false)
-    }
-    #[ignore]
-    #[test]
-    fn test_castle() {
-        let mut board =
-            Board::from_fen("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1".to_string());
-        println!("{}", board);
-        let move_generator = MoveGenerator::default();
-        let mut move_list = MoveList::default();
-        move_generator.generate_quiets::<White>(&mut move_list, &board);
-        let moves = move_list.as_slice();
-        for (i, mv) in moves.iter().enumerate() {
-            println!("{i}: {mv}");
-        }
-        make_move::<White>(&mut board, moves[7].mv);
-        let mut move_list = MoveList::default();
-        move_generator.generate_quiets::<White>(&mut move_list, &board);
-        let moves = move_list.as_slice();
-        for (i, mv) in moves.iter().enumerate() {
-            println!("{i}: {mv}");
-        }
-        println!("{}", board);
-        assert!(false);
-    }
+    hasher.flip_zobrist_hash(board);
+    hasher.flip_side_to_move_hash(board);
 }

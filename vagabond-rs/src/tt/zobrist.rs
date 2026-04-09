@@ -10,21 +10,21 @@ use super::prng::PRNG;
 pub type ZobristHash = u64;
 pub struct ZobristHasher {
     pub(crate) piece_hashes: [[ZobristHash; 12]; 64],
-    pub(crate) side_to_move_hashes: [ZobristHash; 2],
-    pub(crate) castle_hashes: [ZobristHash; 4],
+    pub(crate) castle_hashes: [ZobristHash; 16],
     pub(crate) ep_square_hashes: [ZobristHash; 8],
+    pub(crate) side_to_move_hash: ZobristHash,
 }
 impl ZobristHasher {
     fn new(seed: u64) -> ZobristHasher {
         let mut prng = PRNG::new(seed);
         let piece_hashes: [[ZobristHash; 12]; 64] =
             std::array::from_fn(|_| std::array::from_fn(|_| prng.rand_64()));
-        let side_to_move_hashes: [ZobristHash; 2] = std::array::from_fn(|_| prng.rand_64());
-        let castle_hashes: [ZobristHash; 4] = std::array::from_fn(|_| prng.rand_64());
+        let castle_hashes: [ZobristHash; 16] = std::array::from_fn(|_| prng.rand_64());
         let ep_square_hashes: [ZobristHash; 8] = std::array::from_fn(|_| prng.rand_64());
+        let side_to_move_hash: ZobristHash = prng.rand_64();
         ZobristHasher {
             piece_hashes,
-            side_to_move_hashes,
+            side_to_move_hash,
             castle_hashes,
             ep_square_hashes,
         }
@@ -50,12 +50,14 @@ impl ZobristHasher {
             }
         }
         // side to move hash
-        hash ^= self.side_to_move_hashes[side_to_move as usize];
+        if side_to_move == Color::Black {
+            hash ^= self.side_to_move_hash;
+        }
         // castle hash
-        hash ^= self.castle_hashes[castling.0 as usize % 4];
+        hash ^= self.castle_hashes[castling.0 as usize % 16];
         // ep hash
         if let Some(ep_square) = ep_square {
-            hash ^= self.castle_hashes[ep_square as usize % 8];
+            hash ^= self.ep_square_hashes[ep_square as usize % 8];
         }
         hash
     }
@@ -64,14 +66,15 @@ impl ZobristHasher {
         let piece_index = piece.piece_type as usize + 6 * piece.color as usize;
         *hash ^= self.piece_hashes[sq as usize][piece_index];
     }
-    pub fn update_state_hash(&self, board: &mut Board) {
+    pub fn flip_zobrist_hash(&self, board: &mut Board) {
         // modifies zobrist hash in place
-        let opposite_side = board.side_to_move ^ 1;
-        board.zobrist ^= self.side_to_move_hashes[opposite_side as usize];
-        board.zobrist ^= self.castle_hashes[board.castling_rights().0 as usize % 4];
+        board.zobrist ^= self.castle_hashes[board.castling_rights().0 as usize % 16];
         if let Some(ep_square) = board.en_passant_square() {
             board.zobrist ^= self.ep_square_hashes[ep_square as usize % 8];
         }
+    }
+    pub fn flip_side_to_move_hash(&self, board: &mut Board) {
+        board.zobrist ^= self.side_to_move_hash;
     }
 }
 pub static ZOBRIST_HASHER: OnceLock<ZobristHasher> = OnceLock::new();
@@ -216,5 +219,90 @@ mod tests {
             Move::new(Square::E1, Square::E2, MoveType::Quiet),
             "King Move (Rights Loss Test)",
         );
+    }
+    #[cfg(test)]
+    mod tests {
+        use crate::{
+            ai::evaluation::Evaluation,
+            board::board::Color,
+            engine::{make_move, undo_move},
+            moves::{
+                move_generator::{MoveGenerator, MoveList},
+                traits::{Black, Castle, Side, White},
+            },
+        };
+
+        use super::*;
+
+        fn verify_zobrist_tree<S: Side + Castle + Evaluation>(
+            board: &mut Board,
+            hasher: &ZobristHasher,
+            depth: u8,
+        ) {
+            // 1. Absolute Truth Check: Does incremental match reality?
+            let scratch_hash = hasher.calculate_board_hash(
+                &board.mailbox,
+                board.castling_rights(),
+                board.en_passant_square(),
+                S::COLOR,
+            );
+            assert_eq!(
+                board.zobrist, scratch_hash,
+                "DESYNC DETECTED! Incremental: {}, Scratch: {},\n {}",
+                board.zobrist, scratch_hash, board
+            );
+
+            if depth == 0 {
+                return;
+            }
+
+            let mut move_list = MoveList::default();
+            // Use whatever move generator you have to get all pseudo-legal/legal moves
+            let move_gen = MoveGenerator::default();
+            move_gen.generate_moves_generic::<S>(&mut move_list, &board);
+            dbg!(move_list.as_slice());
+
+            for mv in move_list.move_fetcher() {
+                let hash_before = board.zobrist;
+
+                // Assuming you have a way to know whose turn it is to call the generic make_move
+                let undo = make_move::<S>(board, mv.mv);
+
+                // Recurse into the next depth
+                verify_zobrist_tree::<S::Opposite>(board, hasher, depth - 1);
+
+                undo_move::<S>(mv.mv, board, undo);
+
+                // 2. Make/Undo Symmetry Check
+                assert_eq!(
+                    board.zobrist, hash_before,
+                    "UNDO CORRUPTION! Hash did not restore after undoing move: {:?}",
+                    mv.mv
+                );
+            }
+        }
+
+        #[test]
+        fn test_zobrist_rigorous() {
+            MoveGenerator::init_slider_atk_tables();
+            let hasher = ZobristHasher::get_hasher();
+
+            // Test 1: Standard Start Position
+            let mut board = Board::default(); // Assuming this sets up the standard starting board
+            match board.side_to_move {
+                Color::White => verify_zobrist_tree::<White>(&mut board, &hasher, 4), // Depth 3 or 4 is usually fast enough for a unit test
+                Color::Black => verify_zobrist_tree::<Black>(&mut board, &hasher, 4), // Depth 3 or 4 is usually fast enough for a unit test
+            }
+
+            // Test 2: "Kiwipete" - The Ultimate Stress Test Position
+            // This FEN has captures, castling, en passant, and promotions all available instantly.
+            let mut kiwipete = Board::from_fen(
+                "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1".to_string(),
+            );
+            match board.side_to_move {
+                Color::White => verify_zobrist_tree::<White>(&mut board, &hasher, 3), // Depth 3 or 4 is usually fast enough for a unit test
+                Color::Black => verify_zobrist_tree::<Black>(&mut board, &hasher, 3), // Depth 3 or 4 is usually fast enough for a unit test
+            }
+        }
     }
 }

@@ -28,7 +28,7 @@ pub enum UciOut {
 #[derive(Debug, PartialEq)]
 pub struct InfoParams {
     pub curr_depth: u8,
-    pub pv: Vec<Option<Move>>,
+    pub pv: Vec<Move>,
     pub nodes_searched: u32,
     pub evaluation: i16,
     pub time: u128,
@@ -46,13 +46,7 @@ impl Display for InfoParams {
         let pv = self
             .pv
             .iter()
-            .filter_map(|mv| {
-                if let Some(mv) = mv {
-                    Some(mv.to_string())
-                } else {
-                    None
-                }
-            })
+            .map(|mv| mv.to_string())
             .collect::<Vec<String>>()
             .join(" ");
         let nps = self.nodes_searched as u128 / self.time.max(1) * 1000;
