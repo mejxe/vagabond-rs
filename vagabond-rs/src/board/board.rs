@@ -7,8 +7,11 @@ use std::{
 use crate::{
     ai::evaluation::{Evaluation, PestoEvaluation},
     board::bitboard::{BitBoard, Square},
+    moves::{move_generator::Undo, move_structs::Move},
     tt::zobrist::{ZOBRIST_HASHER, ZobristHash, ZobristHasher},
+    uci::handler,
 };
+pub const MAX_HALF_MOVES: usize = 1024;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Piece {
@@ -43,7 +46,7 @@ pub enum PieceType {
     Queen,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Board {
     pub(crate) mailbox: [Option<Piece>; 64],
 
@@ -62,6 +65,8 @@ pub struct Board {
     pub phase: i16,
 
     pub zobrist: ZobristHash,
+    pub history: Vec<ZobristHash>,
+    pub half_move_clock: usize,
 }
 impl Board {
     const fn fill_mailbox() -> [Option<Piece>; 64] {
@@ -184,6 +189,7 @@ impl Board {
         curr_move: Color,
         castling_rights: CastlingRights,
         en_passant_square: Option<Square>,
+        half_move_clock: usize,
     ) -> Board {
         //let mut b = Board {}
         let mut pieces = [[BitBoard(0); 6]; 2];
@@ -212,6 +218,8 @@ impl Board {
             phase,
             side_to_move: curr_move,
             zobrist,
+            history: Vec::new(),
+            half_move_clock,
         }
     }
     pub fn from_fen(fen_string: String) -> Board {
@@ -221,6 +229,7 @@ impl Board {
         let curr_move = iter.next().expect("Not enough parts");
         let castling_rights = iter.next().expect("Not enough parts");
         let ep_square = iter.next().expect("Not enough parts");
+        let half_move_clock = iter.next().expect("Not enough parts");
         let mut row = 7;
         let mut col = 0;
         for c in placements.chars() {
@@ -258,7 +267,16 @@ impl Board {
         }
         let castling_rights = CastlingRights::new(cr[0], cr[1], cr[2], cr[3]);
         let en_passant_square = chess_notation_to_sq(ep_square);
-        Board::from_mailbox(mailbox, to_move, castling_rights, en_passant_square)
+        let half_move_clock: usize = half_move_clock
+            .parse()
+            .expect("Not a valid integer for half move clock.");
+        Board::from_mailbox(
+            mailbox,
+            to_move,
+            castling_rights,
+            en_passant_square,
+            half_move_clock,
+        )
     }
     fn evaluate_whole_board(mailbox: [Option<Piece>; 64]) -> (i16, i16, i16) {
         let mut mg_scores = [0; 2]; // per color
@@ -303,6 +321,85 @@ impl Board {
     pub fn subtract_score<S: Evaluation>(&mut self, square: Square, piece: Piece) {
         self.mg_score -= PestoEvaluation::get_mg_score(square, piece) * S::MULTIPLIER;
         self.eg_score -= PestoEvaluation::get_eg_score(square, piece) * S::MULTIPLIER;
+    }
+
+    #[inline(always)]
+    pub fn is_draw(&self) -> bool {
+        // check for 50 non capture moves
+        if self.half_move_clock >= 100 {
+            return true;
+        }
+        // check for sufficient material
+        let pawns = self.pieces[Color::White][PieceType::Pawn as usize].0
+            | self.pieces[Color::Black][PieceType::Pawn as usize].0;
+        let rooks = self.pieces[Color::White][PieceType::Rook as usize].0
+            | self.pieces[Color::Black][PieceType::Rook as usize].0;
+        let queens = self.pieces[Color::White][PieceType::Queen as usize].0
+            | self.pieces[Color::Black][PieceType::Queen as usize].0;
+
+        let sufficient_material = (pawns | rooks | queens) != 0;
+        // if not enough pawns rooks and queens check for bishops and knights
+        if !sufficient_material {
+            if ((self.pieces[Color::White][PieceType::Bishop]
+                | self.pieces[Color::White][PieceType::Knight])
+                .0
+                .count_ones()
+                < 2)
+                && ((self.pieces[Color::Black][PieceType::Bishop]
+                    | self.pieces[Color::Black][PieceType::Knight])
+                    .0
+                    .count_ones()
+                    < 2)
+            {
+                return true; // if no sides have at least 2 minor pieces it's a draw
+            }
+        }
+        // check for 3 fold draw
+        let mut i = 2; // previous move of current side is at history[n-2]
+        let mut repetitions = 1;
+        while i < self.history.len() && i < self.half_move_clock {
+            if self.history[self.history.len() - i] == self.zobrist {
+                repetitions += 1;
+            }
+            i += 2; // next moves are n - k, where k is 1 .. self.half_move_clock with step 2
+        }
+        if repetitions >= 3 {
+            return true;
+        }
+        false
+    }
+    pub fn update_history_and_hm(&mut self, mv: Move) {
+        self.history.push(self.zobrist);
+        if mv.move_type().is_capture()
+            || self.get_piece_at_square(mv.from()).unwrap().piece_type == PieceType::Pawn
+        {
+            self.half_move_clock = 0;
+        } else {
+            self.half_move_clock += 1;
+        }
+    }
+    pub fn make_null_move(&mut self) -> Undo {
+        let undo = Undo {
+            previous_ep_square: self.en_passant_square(),
+            captured_piece: None,
+            castling_rights: self.castling_rights,
+            half_move_clock: self.half_move_clock,
+        };
+        let hasher = ZobristHasher::get_hasher();
+        hasher.flip_zobrist_hash(self);
+        self.en_passant_square = None;
+        self.swap_side();
+        hasher.flip_zobrist_hash(self);
+        hasher.flip_side_to_move_hash(self);
+        undo
+    }
+    pub fn undo_null_move(&mut self, undo: Undo) {
+        let hasher = ZobristHasher::get_hasher();
+        hasher.flip_zobrist_hash(self);
+        self.swap_side();
+        self.en_passant_square = undo.previous_ep_square;
+        hasher.flip_zobrist_hash(self);
+        hasher.flip_side_to_move_hash(self);
     }
 }
 fn c_to_piece(c: char) -> Option<Piece> {

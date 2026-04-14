@@ -57,11 +57,16 @@ impl Display for Board {
         }
         board.push_str("\n   A  B  C  D  E  F  G  H \n");
         board.push_str(&format!(
-            "\n castling: {} | en_passant_square = {:?}\n",
+            "\ncastling: {} | en_passant_square: {:?} | half_move_clock: {}\n",
             self.castling_rights(),
-            self.en_passant_square()
+            self.en_passant_square(),
+            self.half_move_clock
         ));
-        board.push_str(&format!("hash: {}", self.zobrist));
+        board.push_str(&format!(
+            "hash: {} | latest_history_hash: {:?}",
+            self.zobrist,
+            self.history.last()
+        ));
         write!(f, "{}", board)
     }
 }

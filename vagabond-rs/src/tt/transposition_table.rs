@@ -11,23 +11,20 @@ pub struct TT {
     size: usize,
 }
 impl TT {
-    pub fn new(size_mb: usize) -> TT {
+    fn new(size_mb: usize) -> TT {
         let size = TT::calculate_size(size_mb);
         let entries = vec![TTEntry::default(); size];
         TT { entries, size }
     }
     pub fn put(&mut self, entry: TTEntry) {
-        let index = entry.key as usize % self.size;
-        let old_entry = self.entries[index];
-        if old_entry.depth() < entry.depth {
-            self.entries[index] = entry;
-        }
-        if old_entry.key == entry.key {
-            // dbg!("kolizja: {}", entry);
-        }
+        let index = entry.key as usize & (self.size - 1);
+        //let old_entry = self.entries[index];
+        //if old_entry.depth() < entry.depth {
+        self.entries[index] = entry;
+        //}
     }
     pub fn get(&self, key: ZobristHash) -> Option<&TTEntry> {
-        let index = key as usize % self.size;
+        let index = key as usize & (self.size - 1);
         self.entries.get(index).filter(|entry| entry.key == key)
     }
     pub fn resize(&mut self, size_mb: usize) {
@@ -35,9 +32,7 @@ impl TT {
         self.entries.resize(self.size, TTEntry::default());
     }
     pub fn clear_tt(&mut self) {
-        self.entries.clear();
-        self.size = TT::calculate_size(TT_DEFAULT_SIZE_MB);
-        self.resize(self.size);
+        self.entries.fill(TTEntry::default());
     }
     fn calculate_size(size_mb: usize) -> usize {
         size_mb * 1024 * 1024 / std::mem::size_of::<TTEntry>()
@@ -50,11 +45,11 @@ impl Default for TT {
 }
 #[derive(Clone, Copy, Debug)]
 pub struct TTEntry {
-    best_move: Move,
-    node_type: NodeType,
     key: ZobristHash,
-    depth: u8,
+    best_move: Move,
     score: i16,
+    depth: u8,
+    node_type: NodeType,
 }
 impl Default for TTEntry {
     fn default() -> Self {

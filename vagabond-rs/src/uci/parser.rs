@@ -1,7 +1,7 @@
 use std::str::SplitAsciiWhitespace;
 
 use crate::{
-    board::board::{Board, PieceType, chess_notation_to_sq},
+    board::board::{Board, Piece, PieceType, chess_notation_to_sq},
     engine::{make_move, make_move_non_generic},
     moves::{
         move_generator::{self, MoveGenerator, MoveList},
@@ -24,6 +24,7 @@ impl Parser {
             Some("isready") => Some(UciIn::IsReady),
             Some("position") => Self::parse_position(words.collect()),
             Some("stop") => Some(UciIn::Stop),
+            Some("newgame") => Some(UciIn::NewGame),
             Some("g") => Some(UciIn::Board),
             Some("quit") => Some(UciIn::Exit),
             _ => None,
@@ -31,6 +32,9 @@ impl Parser {
     }
     fn parse_go(words: Vec<&str>) -> Option<UciIn> {
         let (mut wtime, mut winc, mut btime, mut binc) = (0, 0, 0, 0);
+        if words.len() < 2 {
+            return None;
+        }
         for (i, word) in words.iter().enumerate() {
             match *word {
                 "depth" => {
@@ -53,16 +57,13 @@ impl Parser {
                 _ => {}
             }
         }
-        if wtime != 0 && btime != 0 {
-            Some(UciIn::GoTime(GoTimeParams {
-                wtime,
-                winc,
-                btime,
-                binc,
-            }))
-        } else {
-            None
-        }
+
+        Some(UciIn::GoTime(GoTimeParams {
+            wtime,
+            winc,
+            btime,
+            binc,
+        }))
     }
     fn parse_position(words: Vec<&str>) -> Option<UciIn> {
         let position_type = words.get(0).copied();
@@ -75,7 +76,6 @@ impl Parser {
                     return None;
                 };
                 moves_offset = 6;
-                dbg!(format!("{pieces} {side_to_move} {castling} {ep} {hf} {fm}"));
                 Board::from_fen(format!("{pieces} {side_to_move} {castling} {ep} {hf} {fm}"))
             }
             _ => return None,

@@ -1,5 +1,9 @@
 use std::{
-    sync::{Arc, Mutex, atomic::AtomicBool, mpsc::Sender},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::Sender,
+    },
     time::Instant,
 };
 
@@ -7,7 +11,7 @@ use crate::{
     ai::{
         LimitedTime, NoLimit,
         evaluation::{Evaluation, PestoEvaluation},
-        negamax::AI,
+        negamax::{AI, MAX_SEARCH_DEPTH, PvArray},
     },
     board::{
         bitboard::Square,
@@ -15,7 +19,7 @@ use crate::{
     },
     moves::{
         leapers::KNIGHT_ATK_TABLE,
-        move_generator::{MoveGenerator, Undo},
+        move_generator::{MoveGenerator, MoveList, Undo},
         move_structs::{Move, MoveType},
         sliders::CASTLING_MASK,
         traits::{Black, Castle, PawnDirection, Side, White},
@@ -70,9 +74,10 @@ impl Engine {
         };
         let mut allocated_time = (my_time_left / 20) + (my_increment / 2); //simple heuristic for the move time
 
-        if allocated_time >= my_time_left {
+        if allocated_time > my_time_left {
             allocated_time = my_time_left - 50; // padding for delays
         };
+
         let mut current_depth = 1;
         let aborted = false;
         let nodes_searched = 0;
@@ -82,6 +87,7 @@ impl Engine {
             start: time_started,
             allocated_time,
         };
+
         let mut ai = AI::new(
             aborted,
             stop,
@@ -90,14 +96,18 @@ impl Engine {
             self.move_gen.clone(),
             Arc::clone(&self.tt),
         );
+
         while !aborted {
+            if ai.stop().load(Ordering::Relaxed) || current_depth as usize >= MAX_SEARCH_DEPTH {
+                break;
+            }
             let (current_best_move, evaluation) = ai.make_decision(current_depth, &mut self.board);
             let time_passed = time_started.elapsed().as_millis();
             if ai.aborted() && best_move.is_some() {
                 break; // dont send the move that it aborted on
             }
             if let Some(tx) = &self.tx {
-                let pv = self.find_pv(current_depth);
+                let pv = self.find_pv(ai.pv_array());
                 let uci_params = InfoParams {
                     nodes_searched: ai.nodes_searched(),
                     pv: pv,
@@ -115,6 +125,7 @@ impl Engine {
         best_move
     }
     pub fn go(&mut self, max_depth: u8, stop: StopFlag) -> Option<Move> {
+        let max_depth = u8::min(max_depth, MAX_SEARCH_DEPTH as u8);
         let aborted = false;
         let nodes_searched = 0;
         let mut best_move: Option<Move> = None;
@@ -131,11 +142,11 @@ impl Engine {
         for current_depth in 1..=max_depth {
             let (current_best_move, evaluation) = ai.make_decision(current_depth, &mut self.board);
             let time_elapsed = time_started.elapsed().as_millis();
-            if aborted {
+            if ai.aborted() && best_move.is_some() {
                 break;
             }
             if let Some(tx) = &self.tx {
-                let pv = self.find_pv(current_depth);
+                let pv = self.find_pv(ai.pv_array());
                 let uci_params = InfoParams {
                     nodes_searched: ai.nodes_searched(),
                     pv,
@@ -151,29 +162,59 @@ impl Engine {
         }
         best_move
     }
-    pub fn find_pv(&self, at_depth: u8) -> Vec<Move> {
-        let mut board_copy = self.board.clone();
-        let mut current_depth = 0;
-        let mut pv_line = vec![];
-        while current_depth < at_depth {
-            if let Some(mv) = self.tt.lock().unwrap().get(board_copy.zobrist) {
-                pv_line.push(mv.best_move());
-                make_move_non_generic(&mut board_copy, mv.best_move());
-                board_copy.swap_side();
-            } else {
-                break;
-            }
-            current_depth += 1;
-        }
-        pv_line
+    pub fn find_pv(&self, pv_array: &PvArray) -> Vec<Move> {
+        pv_array
+            .get_pv()
+            .iter()
+            .filter_map(|mv| {
+                if let Some(mv) = mv {
+                    Some(mv.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
+    //    pub fn find_pv(&self, at_depth: u8) -> Vec<Move> {
+    //        let mut board_copy = self.board.clone();
+    //        let mut current_depth = 0;
+    //        let mut pv_line = vec![];
+    //        while current_depth < at_depth {
+    //            if let Some(mv) = self.tt.lock().unwrap().get(board_copy.zobrist) {
+    //                let mut move_list = MoveList::default();
+    //                self.move_gen.generate_moves(&mut move_list, &board_copy);
+    //
+    //                if !move_list
+    //                    .as_slice()
+    //                    .iter()
+    //                    .any(|ext_mv| ext_mv.mv == mv.best_move())
+    //                {
+    //                    break;
+    //                }
+    //
+    //                pv_line.push(mv.best_move());
+    //                make_move_non_generic(&mut board_copy, mv.best_move());
+    //                if (board_copy.is_draw()) {
+    //                    break;
+    //                }
+    //                board_copy.swap_side();
+    //            } else {
+    //                break;
+    //            }
+    //            current_depth += 1;
+    //        }
+    //        pv_line
+    //    }
 
     pub fn set_depth(&mut self, depth: u8) {
         self.depth = depth;
     }
 
-    pub fn board(&self) -> Board {
-        self.board
+    pub fn board(&self) -> &Board {
+        &self.board
+    }
+    pub fn board_mut(&mut self) -> &mut Board {
+        &mut self.board
     }
 }
 
@@ -193,7 +234,11 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
     board: &mut Board,
     mv: Move,
 ) -> Undo {
+    // save the previous zobrist
+    board.update_history_and_hm(mv);
+
     let hasher = ZobristHasher::get_hasher();
+    // xor out the previous hash of state
     hasher.flip_zobrist_hash(board);
 
     let from = mv.from();
@@ -203,6 +248,7 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
         castling_rights: board.castling_rights(),
         previous_ep_square: board.en_passant_square(),
         captured_piece: None,
+        half_move_clock: board.half_move_clock,
     };
     let color = S::COLOR;
     let opposite_color = S::Opposite::COLOR;
@@ -301,12 +347,15 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
     board.set_castling_rights(CastlingRights(
         board.castling_rights().0 & (CASTLING_MASK[from as usize] & CASTLING_MASK[to as usize]),
     ));
-    // update hash
+    // xor in the new hash of state
     hasher.flip_zobrist_hash(board);
     hasher.flip_side_to_move_hash(board);
     undo_move
 }
 pub fn undo_move<S: Side + Castle + Evaluation>(mv: Move, board: &mut Board, undo: Undo) {
+    // pop the move from history since we revert it
+    board.history.pop();
+
     let hasher = ZobristHasher::get_hasher();
     hasher.flip_zobrist_hash(board);
 
@@ -394,6 +443,8 @@ pub fn undo_move<S: Side + Castle + Evaluation>(mv: Move, board: &mut Board, und
 
     board.set_castling_rights(undo.castling_rights);
     board.set_en_passant_square(undo.previous_ep_square);
+    board.half_move_clock = undo.half_move_clock;
+
     hasher.flip_zobrist_hash(board);
     hasher.flip_side_to_move_hash(board);
 }

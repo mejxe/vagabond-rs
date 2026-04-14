@@ -13,6 +13,7 @@ pub enum UciIn {
     GoDepth(u8),
     GoTime(GoTimeParams),
     GoInfinite,
+    NewGame,
     Stop,
     Board,
     Exit,

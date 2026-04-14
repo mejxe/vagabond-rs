@@ -4,7 +4,7 @@ use std::sync::{
     mpsc::{Receiver, Sender},
 };
 
-use crate::{engine::Engine, uci::structs::IDENTITY};
+use crate::{board, engine::Engine, uci::structs::IDENTITY};
 
 use super::structs::{UciIn, UciOut};
 
@@ -41,6 +41,8 @@ impl Handler {
                     std::thread::spawn(move || {
                         if let Some(mv) = engine_clone.go(depth, stop_clone) {
                             tx_clone.send(UciOut::BestMove(mv)).unwrap();
+                        } else {
+                            panic!("No move returned")
                         }
                     });
                 }
@@ -52,6 +54,8 @@ impl Handler {
                     std::thread::spawn(move || {
                         if let Some(mv) = engine_clone.go_time(time_params, stop_clone) {
                             tx_clone.send(UciOut::BestMove(mv)).unwrap();
+                        } else {
+                            panic!("No move returned")
                         }
                     });
                 }
@@ -63,6 +67,8 @@ impl Handler {
                     std::thread::spawn(move || {
                         if let Some(mv) = engine_clone.go(254, stop_clone) {
                             tx_clone.send(UciOut::BestMove(mv)).unwrap();
+                        } else {
+                            panic!("No move returned")
                         }
                     });
                 }
@@ -70,8 +76,14 @@ impl Handler {
                 UciIn::Position(pos) => self.engine.set_board(pos),
                 UciIn::Board => self
                     .transmiter
-                    .send(UciOut::Board(self.engine.board()))
+                    .send(UciOut::Board(self.engine.board().clone()))
                     .unwrap(),
+                UciIn::NewGame => {
+                    self.stop.store(true, Ordering::Relaxed);
+                    let board_ref = self.engine.board_mut();
+                    board_ref.history.clear();
+                    board_ref.half_move_clock = 0
+                }
                 _ => {}
             }
         }

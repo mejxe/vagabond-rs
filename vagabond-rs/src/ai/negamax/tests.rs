@@ -27,7 +27,8 @@ fn nega_max_test() {
     let stop_flag = Arc::new(AtomicBool::new(false));
     let nodes = 0;
     let time_limit = NoLimit;
-    let tt = Arc::new(Mutex::new(TT::default()));
+    let mut tt = TT::default();
+    let mut tt = Arc::new(Mutex::new(TT::default()));
     let mut ai = AI::new(false, stop_flag, time_limit, nodes, mvg, tt);
     let (move_made, _) = ai.make_decision(2, &mut board);
     make_move::<White>(&mut board, move_made.unwrap());
@@ -46,7 +47,7 @@ fn nega_max_mate_test() {
     println! {"{}", board};
     let mvg = MoveGenerator::default();
     let time_limit = NoLimit;
-    let tt = Arc::new(Mutex::new(TT::default()));
+    let mut tt = Arc::new(Mutex::new(TT::default()));
     let mut ai = AI::new(false, stop_flag, time_limit, nodes, mvg.clone(), tt);
     let (move_made, _) = ai.make_decision(4, &mut board);
     println!("{:?}", move_made.unwrap());

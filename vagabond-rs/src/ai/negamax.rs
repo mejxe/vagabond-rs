@@ -2,7 +2,10 @@ use std::{
     char::MAX,
     f32::MIN,
     i16,
-    sync::{Arc, Mutex, atomic::Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Instant,
 };
 
@@ -25,6 +28,8 @@ use crate::{
 
 use super::{TimeLimit, evaluation::PestoEvaluation};
 
+pub const MAX_SEARCH_DEPTH: usize = 64;
+
 #[derive(Clone)]
 pub struct AI<T: TimeLimit> {
     aborted: bool,
@@ -34,6 +39,7 @@ pub struct AI<T: TimeLimit> {
     nodes_searched: u32,
     move_generator: MoveGenerator,
     tt: Arc<Mutex<TT>>,
+    pv_array: PvArray,
 }
 impl<T: TimeLimit> AI<T> {
     pub fn new(
@@ -52,6 +58,7 @@ impl<T: TimeLimit> AI<T> {
             nodes_searched,
             move_generator,
             tt,
+            pv_array: PvArray::default(),
         }
     }
     pub fn reset_fields(&mut self) {
@@ -62,9 +69,9 @@ impl<T: TimeLimit> AI<T> {
     pub fn make_decision(&mut self, current_depth: u8, board: &mut Board) -> (Option<Move>, i16) {
         // init variables
         let mut best_mv: Option<Move> = None;
-        let mut max = -31000;
+        let mut max = -32000;
         let mut alpha = max; // lower bound of our search window - the score that we are guaranteed
-        let beta = -alpha; // higher ^...^ - the score that opponent is guaranteed, we can't surpass it or opponent won't allow us the move
+        let beta = -alpha; // higher -||- - the score that opponent is guaranteed, we can't surpass it or opponent won't allow us the move
 
         // spawn the move fetcher
         let mut move_list = MoveList::default();
@@ -81,13 +88,22 @@ impl<T: TimeLimit> AI<T> {
 
         // generate unsorted pseudo legal moves
         self.move_generator.generate_moves(&mut move_list, board);
+
+        // if there is a 3-fold draw at root return a random move
+        if board.is_draw() {
+            self.aborted = true;
+            //return (Some(move_list.moves.first().unwrap().mv), 0);
+
+            return (None, 0);
+        }
         // score moves
         move_list.score_moves(board, 0, &self.killer_moves, tt_move);
         // find the best move in the array [i..n], put it at ith position and increment i
         let moves = move_list.move_fetcher();
         for mv in moves {
             // break if stop flag is on
-            if current_depth > 1 && self.stop.load(Ordering::Relaxed) {
+            if current_depth > 1 && (self.stop.load(Ordering::Relaxed) || self.aborted) {
+                self.aborted = true;
                 break;
             };
             // make move
@@ -107,7 +123,7 @@ impl<T: TimeLimit> AI<T> {
                 which is opposite to ours.
                  */
                 let score = match board.side_to_move {
-                    Color::White => -self.nega_max::<Black>(
+                    Color::White => -self.negamax::<Black>(
                         current_depth - 1,
                         board,
                         -beta,
@@ -115,7 +131,7 @@ impl<T: TimeLimit> AI<T> {
                         current_depth,
                         &mut tt,
                     ),
-                    Color::Black => -self.nega_max::<White>(
+                    Color::Black => -self.negamax::<White>(
                         current_depth - 1,
                         board,
                         -beta,
@@ -128,9 +144,11 @@ impl<T: TimeLimit> AI<T> {
                 if score > max {
                     max = score;
                     best_mv = Some(mv.mv);
+                    self.pv_array.propagate(0, mv.mv);
                 };
                 alpha = i16::max(alpha, max);
             }
+
             undo_move_non_generic(board, mv.mv, undo);
         }
         if let Some(mv) = best_mv {
@@ -144,7 +162,7 @@ impl<T: TimeLimit> AI<T> {
         }
         return (best_mv, max);
     }
-    fn nega_max<S: Side + Castle + PawnDirection + Evaluation>(
+    fn negamax<S: Side + Castle + PawnDirection + Evaluation>(
         &mut self,
         mut depth: u8,
         board: &mut Board,
@@ -153,6 +171,11 @@ impl<T: TimeLimit> AI<T> {
         max_depth: u8,
         tt: &mut TT,
     ) -> i16 {
+        let mut best_score = -32000;
+        let mut best_move: Option<Move> = None;
+        let ply = max_depth - depth;
+        self.pv_array.init_node(ply);
+
         // early stop conditions
         if self.aborted {
             return 0;
@@ -163,10 +186,12 @@ impl<T: TimeLimit> AI<T> {
                 return 0;
             };
         };
+        if board.is_draw() {
+            return 0;
+        }
+
         let mut tt_move: Option<Move> = None;
         let mut tt_node_bound = NodeType::Upperbound;
-
-        let ply = max_depth - depth;
 
         // probe tt
         if let Some(entry) = tt.get(board.zobrist) {
@@ -196,8 +221,16 @@ impl<T: TimeLimit> AI<T> {
                 return self.quiescence_search::<S>(board, alpha, beta);
             }
         }
-        let mut best_score = i16::MIN;
-        let mut best_move: Option<Move> = None;
+        // null move pruning
+        if ply > 0 && depth >= 3 && !self.move_generator.is_king_in_check(board, S::COLOR) {
+            let null_undo = board.make_null_move();
+            let nmp_score =
+                -self.negamax::<S::Opposite>(depth - 3, board, -beta, -beta + 1, max_depth, tt);
+            board.undo_null_move(null_undo);
+            if nmp_score >= beta {
+                return beta;
+            }
+        }
 
         let mut move_list = MoveList::default();
 
@@ -211,8 +244,10 @@ impl<T: TimeLimit> AI<T> {
             let undo = make_move::<S>(board, mv.mv);
             if !self.move_generator.is_king_in_check(board, S::COLOR) {
                 legal_moves += 1;
+
                 let score =
-                    -self.nega_max::<S::Opposite>(depth - 1, board, -beta, -alpha, max_depth, tt);
+                    -self.negamax::<S::Opposite>(depth - 1, board, -beta, -alpha, max_depth, tt);
+
                 if score > best_score {
                     best_score = score;
                     best_move = Some(mv.mv);
@@ -241,16 +276,17 @@ impl<T: TimeLimit> AI<T> {
                 // search for this move finished and the move raised the alpha bound so it's a potential pv move
                 alpha = best_score;
                 tt_node_bound = NodeType::Exact;
+                self.pv_array.propagate(ply, best_move.unwrap());
             }
             undo_move::<S>(mv.mv, board, undo);
         }
         // checkmate check
         if legal_moves == 0 && self.move_generator.is_king_in_check(board, S::COLOR) {
-            return -30000 + ply as i16;
+            best_score = -30000 + ply as i16;
 
         // stalemate check
         } else if legal_moves == 0 {
-            return 0;
+            best_score = 0;
         }
         tt.put(TTEntry::new(
             best_move.unwrap_or_default(),
@@ -343,6 +379,45 @@ impl<T: TimeLimit> AI<T> {
 
     pub fn aborted(&self) -> bool {
         self.aborted
+    }
+
+    pub fn stop(&self) -> &AtomicBool {
+        &self.stop
+    }
+
+    pub fn pv_array(&self) -> &PvArray {
+        &self.pv_array
+    }
+}
+#[derive(Debug, Clone)]
+pub struct PvArray {
+    pv: [[Option<Move>; MAX_SEARCH_DEPTH]; MAX_SEARCH_DEPTH],
+    pv_length: [usize; MAX_SEARCH_DEPTH],
+}
+impl PvArray {
+    pub fn propagate(&mut self, ply: u8, new_move: Move) {
+        let ply = ply as usize;
+        self.pv[ply][0] = Some(new_move);
+        let child_len = self.pv_length[ply + 1];
+        for i in 0..child_len {
+            self.pv[ply][i + 1] = self.pv[ply + 1][i];
+        }
+        self.pv_length[ply] = child_len + 1;
+    }
+    pub fn get_pv(&self) -> Vec<Option<Move>> {
+        let pv_len = self.pv_length[0];
+        self.pv[0][0..pv_len as usize].to_vec()
+    }
+    pub fn init_node(&mut self, ply: u8) {
+        self.pv_length[ply as usize] = 0;
+    }
+}
+impl Default for PvArray {
+    fn default() -> Self {
+        PvArray {
+            pv: [[None; MAX_SEARCH_DEPTH]; MAX_SEARCH_DEPTH],
+            pv_length: [0; MAX_SEARCH_DEPTH],
+        }
     }
 }
 

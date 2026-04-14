@@ -25,6 +25,7 @@ pub struct Undo {
     pub captured_piece: Option<PieceType>,
     pub previous_ep_square: Option<Square>,
     pub castling_rights: CastlingRights,
+    pub half_move_clock: usize,
 }
 #[derive(Debug, Copy, Clone)]
 pub struct MoveList {
