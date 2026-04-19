@@ -216,6 +216,10 @@ impl Engine {
     pub fn board_mut(&mut self) -> &mut Board {
         &mut self.board
     }
+
+    pub fn tt_mut(&mut self) -> &mut Arc<Mutex<TT>> {
+        &mut self.tt
+    }
 }
 
 pub fn make_move_non_generic(board: &mut Board, mv: Move) -> Undo {
@@ -235,6 +239,7 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
     mv: Move,
 ) -> Undo {
     // save the previous zobrist
+    let previous_hm_clock = board.half_move_clock;
     board.update_history_and_hm(mv);
 
     let hasher = ZobristHasher::get_hasher();
@@ -248,7 +253,7 @@ pub fn make_move<S: Side + PawnDirection + Castle + Evaluation>(
         castling_rights: board.castling_rights(),
         previous_ep_square: board.en_passant_square(),
         captured_piece: None,
-        half_move_clock: board.half_move_clock,
+        half_move_clock: previous_hm_clock,
     };
     let color = S::COLOR;
     let opposite_color = S::Opposite::COLOR;

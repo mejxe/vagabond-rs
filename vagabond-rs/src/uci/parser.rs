@@ -32,12 +32,12 @@ impl Parser {
     }
     fn parse_go(words: Vec<&str>) -> Option<UciIn> {
         let (mut wtime, mut winc, mut btime, mut binc) = (0, 0, 0, 0);
-        if words.len() < 2 {
-            return None;
-        }
         for (i, word) in words.iter().enumerate() {
             match *word {
                 "depth" => {
+                    if words.len() < 2 {
+                        return None;
+                    }
                     let depth = words[i + 1].parse::<u8>().ok()?;
                     return Some(UciIn::GoDepth(depth));
                 }

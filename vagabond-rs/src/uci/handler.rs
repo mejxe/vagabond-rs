@@ -4,7 +4,7 @@ use std::sync::{
     mpsc::{Receiver, Sender},
 };
 
-use crate::{board, engine::Engine, uci::structs::IDENTITY};
+use crate::{ai::negamax::MAX_SEARCH_DEPTH, board, engine::Engine, uci::structs::IDENTITY};
 
 use super::structs::{UciIn, UciOut};
 
@@ -65,7 +65,7 @@ impl Handler {
                     let mut engine_clone = self.engine.clone();
                     let tx_clone = self.transmiter.clone();
                     std::thread::spawn(move || {
-                        if let Some(mv) = engine_clone.go(254, stop_clone) {
+                        if let Some(mv) = engine_clone.go(MAX_SEARCH_DEPTH as u8, stop_clone) {
                             tx_clone.send(UciOut::BestMove(mv)).unwrap();
                         } else {
                             panic!("No move returned")
@@ -82,7 +82,8 @@ impl Handler {
                     self.stop.store(true, Ordering::Relaxed);
                     let board_ref = self.engine.board_mut();
                     board_ref.history.clear();
-                    board_ref.half_move_clock = 0
+                    board_ref.half_move_clock = 0;
+                    self.engine.tt_mut().lock().unwrap().clear_tt();
                 }
                 _ => {}
             }

@@ -324,12 +324,16 @@ impl Board {
     }
 
     #[inline(always)]
-    pub fn is_draw(&self) -> bool {
+    pub fn is_draw(&self, max_repetitions: usize) -> bool {
+        // max_repetitions - how many times a board can repeat before being flagged
         // check for 50 non capture moves
         if self.half_move_clock >= 100 {
             return true;
         }
-        // check for sufficient material
+        // check for 3 fold draw
+        if self.num_repetitions() >= max_repetitions {
+            return true;
+        }
         let pawns = self.pieces[Color::White][PieceType::Pawn as usize].0
             | self.pieces[Color::Black][PieceType::Pawn as usize].0;
         let rooks = self.pieces[Color::White][PieceType::Rook as usize].0
@@ -338,7 +342,6 @@ impl Board {
             | self.pieces[Color::Black][PieceType::Queen as usize].0;
 
         let sufficient_material = (pawns | rooks | queens) != 0;
-        // if not enough pawns rooks and queens check for bishops and knights
         if !sufficient_material {
             if ((self.pieces[Color::White][PieceType::Bishop]
                 | self.pieces[Color::White][PieceType::Knight])
@@ -351,22 +354,21 @@ impl Board {
                     .count_ones()
                     < 2)
             {
-                return true; // if no sides have at least 2 minor pieces it's a draw
+                return true;
             }
         }
-        // check for 3 fold draw
+        false
+    }
+    pub fn num_repetitions(&self) -> usize {
         let mut i = 2; // previous move of current side is at history[n-2]
         let mut repetitions = 1;
-        while i < self.history.len() && i < self.half_move_clock {
+        while i <= self.history.len() && i <= self.half_move_clock {
             if self.history[self.history.len() - i] == self.zobrist {
                 repetitions += 1;
             }
             i += 2; // next moves are n - k, where k is 1 .. self.half_move_clock with step 2
         }
-        if repetitions >= 3 {
-            return true;
-        }
-        false
+        repetitions
     }
     pub fn update_history_and_hm(&mut self, mv: Move) {
         self.history.push(self.zobrist);

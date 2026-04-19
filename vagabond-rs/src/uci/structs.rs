@@ -52,8 +52,8 @@ impl Display for InfoParams {
             .join(" ");
         let nps = self.nodes_searched as u128 / self.time.max(1) * 1000;
         let msg = format!(
-            "depth {} nodes {} score cp {} time {} nps {} pv {} ",
-            self.curr_depth, self.nodes_searched, self.evaluation, self.time, nps, pv
+            "depth {} multipv 1 score cp {} time {} nodes {} nps {} pv {} ",
+            self.curr_depth, self.evaluation, self.time, self.nodes_searched, nps, pv
         );
         write!(f, "{}", msg)
     }

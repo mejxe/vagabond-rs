@@ -72,6 +72,8 @@ impl<T: TimeLimit> AI<T> {
         let mut max = -32000;
         let mut alpha = max; // lower bound of our search window - the score that we are guaranteed
         let beta = -alpha; // higher -||- - the score that opponent is guaranteed, we can't surpass it or opponent won't allow us the move
+        let ply = 0;
+        self.pv_array.init_node(0);
 
         // spawn the move fetcher
         let mut move_list = MoveList::default();
@@ -90,7 +92,7 @@ impl<T: TimeLimit> AI<T> {
         self.move_generator.generate_moves(&mut move_list, board);
 
         // if there is a 3-fold draw at root return a random move
-        if board.is_draw() {
+        if board.is_draw(3) {
             self.aborted = true;
             //return (Some(move_list.moves.first().unwrap().mv), 0);
 
@@ -128,37 +130,43 @@ impl<T: TimeLimit> AI<T> {
                         board,
                         -beta,
                         -alpha,
-                        current_depth,
+                        ply + 1,
                         &mut tt,
+                        mv,
+                        current_depth,
                     ),
                     Color::Black => -self.negamax::<White>(
                         current_depth - 1,
                         board,
                         -beta,
                         -alpha,
-                        current_depth,
+                        ply + 1,
                         &mut tt,
+                        mv,
+                        current_depth,
                     ),
                 };
 
                 if score > max {
                     max = score;
                     best_mv = Some(mv.mv);
-                    self.pv_array.propagate(0, mv.mv);
+                    self.pv_array.propagate(ply, mv.mv);
                 };
                 alpha = i16::max(alpha, max);
             }
 
             undo_move_non_generic(board, mv.mv, undo);
         }
-        if let Some(mv) = best_mv {
-            tt.put(TTEntry::new(
-                mv,
-                NodeType::Exact,
-                board.zobrist,
-                current_depth,
-                max,
-            ));
+        if max != 0 {
+            if let Some(mv) = best_mv {
+                tt.put(TTEntry::new(
+                    mv,
+                    NodeType::Exact,
+                    board.zobrist,
+                    current_depth,
+                    max,
+                ));
+            }
         }
         return (best_mv, max);
     }
@@ -168,14 +176,16 @@ impl<T: TimeLimit> AI<T> {
         board: &mut Board,
         mut alpha: i16,
         beta: i16,
-        max_depth: u8,
+        ply: u8,
         tt: &mut TT,
+        root_move: ExtMove,
+        max_depth: u8,
     ) -> i16 {
         let mut best_score = -32000;
         let mut best_move: Option<Move> = None;
-        let ply = max_depth - depth;
         self.pv_array.init_node(ply);
 
+        let mut null_window_search = false;
         // early stop conditions
         if self.aborted {
             return 0;
@@ -186,17 +196,18 @@ impl<T: TimeLimit> AI<T> {
                 return 0;
             };
         };
-        if board.is_draw() {
+        if board.is_draw(3) {
+            self.pv_array.init_node(ply);
             return 0;
         }
 
         let mut tt_move: Option<Move> = None;
         let mut tt_node_bound = NodeType::Upperbound;
 
-        // probe tt
+        // probe tt (only if the move is not a repeat to avoid cycles)
         if let Some(entry) = tt.get(board.zobrist) {
             if depth <= entry.depth() {
-                if *entry.node_type() == NodeType::Exact {
+                if *entry.node_type() == NodeType::Exact && !(beta > alpha + 1) {
                     // search ended on this move and it's score was in the <alpha; beta> window, the move is a pv variation
                     return entry.score();
                 } else if *entry.node_type() == NodeType::Lowerbound && entry.score() >= beta {
@@ -218,14 +229,22 @@ impl<T: TimeLimit> AI<T> {
                 depth += 1;
             } else {
                 // if not then it's safe to start qs
-                return self.quiescence_search::<S>(board, alpha, beta);
+                return self.quiescence_search::<S>(board, alpha, beta, ply);
             }
         }
         // null move pruning
         if ply > 0 && depth >= 3 && !self.move_generator.is_king_in_check(board, S::COLOR) {
             let null_undo = board.make_null_move();
-            let nmp_score =
-                -self.negamax::<S::Opposite>(depth - 3, board, -beta, -beta + 1, max_depth, tt);
+            let nmp_score = -self.negamax::<S::Opposite>(
+                depth - 3,
+                board,
+                -beta,
+                -beta + 1,
+                ply + 1,
+                tt,
+                root_move,
+                max_depth,
+            );
             board.undo_null_move(null_undo);
             if nmp_score >= beta {
                 return beta;
@@ -244,16 +263,57 @@ impl<T: TimeLimit> AI<T> {
             let undo = make_move::<S>(board, mv.mv);
             if !self.move_generator.is_king_in_check(board, S::COLOR) {
                 legal_moves += 1;
-
-                let score =
-                    -self.negamax::<S::Opposite>(depth - 1, board, -beta, -alpha, max_depth, tt);
-
+                let mut score;
+                if null_window_search {
+                    /* PVS search - we search with a null window to force cut off's
+                     *
+                     * opponent's search is bound by [-alpha - 1; -alpha],
+                     * if it finds a better move than our alpha it fails high and we prune it
+                     * if it doesn't find a better move than -alpha-1 it fails low
+                     * if it fails low we need to search it with normal window as it may be a valid move
+                     */
+                    score = -self.negamax::<S::Opposite>(
+                        depth - 1,
+                        board,
+                        -alpha - 1, // this creates the [alpha, alpha+1] window,
+                        -alpha,
+                        ply + 1,
+                        tt,
+                        mv,
+                        max_depth,
+                    );
+                    if score > alpha && score < beta {
+                        // failed low, research if it doesn't fail high in the current search
+                        score = -self.negamax::<S::Opposite>(
+                            depth - 1,
+                            board,
+                            -beta,
+                            -alpha,
+                            ply + 1,
+                            tt,
+                            mv,
+                            max_depth,
+                        );
+                    }
+                } else {
+                    score = -self.negamax::<S::Opposite>(
+                        depth - 1,
+                        board,
+                        -beta,
+                        -alpha,
+                        ply + 1,
+                        tt,
+                        mv,
+                        max_depth,
+                    );
+                }
                 if score > best_score {
                     best_score = score;
                     best_move = Some(mv.mv);
                 }
 
                 if score >= beta {
+                    // score is better than opponent's best forced move, so fail high
                     if !mv.mv.move_type().is_capture() {
                         // if a move causes a beta cut off in this branch, save it as prioritized move for sister branches at this depth
                         if self.killer_moves[ply as usize][0] != Some(mv.mv) {
@@ -271,12 +331,15 @@ impl<T: TimeLimit> AI<T> {
                     ));
                     return score;
                 }
+                null_window_search = true; // first move that doesn't fail high turns on the pvs
             }
             if best_score > alpha {
-                // search for this move finished and the move raised the alpha bound so it's a potential pv move
+                //the move raised the alpha bound so it's a potential pv move
                 alpha = best_score;
                 tt_node_bound = NodeType::Exact;
-                self.pv_array.propagate(ply, best_move.unwrap());
+                if ply < max_depth {
+                    self.pv_array.propagate(ply, best_move.unwrap());
+                }
             }
             undo_move::<S>(mv.mv, board, undo);
         }
@@ -288,13 +351,15 @@ impl<T: TimeLimit> AI<T> {
         } else if legal_moves == 0 {
             best_score = 0;
         }
-        tt.put(TTEntry::new(
-            best_move.unwrap_or_default(),
-            tt_node_bound,
-            board.zobrist,
-            depth,
-            best_score,
-        ));
+        if let Some(best_move) = best_move {
+            tt.put(TTEntry::new(
+                best_move,
+                tt_node_bound,
+                board.zobrist,
+                depth,
+                best_score,
+            ));
+        }
         return best_score;
     }
     fn quiescence_search<S: Side + Castle + PawnDirection + Evaluation>(
@@ -302,11 +367,13 @@ impl<T: TimeLimit> AI<T> {
         board: &mut Board,
         mut alpha: i16,
         beta: i16,
+        ply: u8,
     ) -> i16 {
         /*
          qs search searches the position until no captures are possible,
          ensuring that there are no surprises in the considered line
         */
+        self.pv_array.init_node(ply);
         if self.aborted {
             return 0;
         }
@@ -355,7 +422,7 @@ impl<T: TimeLimit> AI<T> {
             self.nodes_searched += 1;
             let undo = make_move::<S>(board, mv.mv);
             if !self.move_generator.is_king_in_check(board, S::COLOR) {
-                let score = -self.quiescence_search::<S::Opposite>(board, -beta, -alpha);
+                let score = -self.quiescence_search::<S::Opposite>(board, -beta, -alpha, ply + 1);
                 if score > best_score {
                     best_score = score;
                 }
