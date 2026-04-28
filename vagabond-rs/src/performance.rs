@@ -244,7 +244,6 @@ mod tests {
         println!("{}", board);
         let mut engine = Engine::default();
         engine.set_board(board);
-        engine.set_depth(7);
         for i in 0..1 {
             //let move_made = engine.play();
             //println!("{i}: {}", move_made.unwrap());

@@ -1,4 +1,4 @@
-use std::{arch::x86_64::_pext_u64, fmt::Display, path::Iter};
+use std::{arch::x86_64::_pext_u64, fmt::Display, mem, path::Iter};
 
 use crate::{
     board::{
@@ -35,10 +35,7 @@ pub struct MoveList {
 impl Default for MoveList {
     fn default() -> Self {
         MoveList {
-            moves: [ExtMove {
-                mv: Move(0),
-                score: 0,
-            }; 256],
+            moves: [ExtMove::default(); 256],
             count: 0,
         }
     }
@@ -64,16 +61,30 @@ impl MoveList {
         ply: u8,
         killers: &[[Option<Move>; 2]; 64],
         tt_move: Option<Move>,
+        ignore_move: Option<&Vec<Move>>,
     ) {
         // score every move in order: TT > MVV_LVA captures > killer moves TODO: History moves
-        for mv in self.moves[..self.count].iter_mut() {
+        let mut i = 0;
+        while i < self.count {
+            if let Some(ignore) = &ignore_move {
+                let mv = self.moves[i];
+                if ignore.contains(&mv.mv) {
+                    self.moves.swap(i, self.count - 1);
+                    self.count -= 1;
+                    i += 1;
+                    continue;
+                }
+            }
+            let mv = self.moves.get_mut(i).unwrap();
             if let Some(pv) = tt_move {
                 if mv.mv == pv {
                     mv.score = 15000;
+                    i += 1;
                     continue;
                 }
             }
             mv.score_move(board, ply, killers);
+            i += 1;
         }
     }
     pub fn score_captures(&mut self, board: &Board) {

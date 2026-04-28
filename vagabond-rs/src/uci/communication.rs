@@ -42,12 +42,16 @@ impl Communication {
                 UciOut::ReadyOk => println!("readyok"),
                 UciOut::BestMove(mv) => println!("bestmove {mv}"),
                 UciOut::Board(board) => println!("{board}"),
-                UciOut::Info(inf) => println!("info {inf}"),
+                UciOut::Info(inf) => inf.iter().for_each(|info_string| println!("{info_string}")),
+                UciOut::Options(opts) => {
+                    opts.iter().for_each(|opt| println!("{opt}"));
+                    println!("uciok")
+                }
                 _ => {}
             }
         }
     }
     fn print_uci(identity: EngineIdentity) {
-        println!("{}\nuciok", identity)
+        println!("{}\n", identity)
     }
 }

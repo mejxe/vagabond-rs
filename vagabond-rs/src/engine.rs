@@ -1,59 +1,59 @@
 use std::{
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-        mpsc::Sender,
-    },
+    sync::{Arc, Mutex, atomic::Ordering, mpsc::Sender},
     time::Instant,
 };
 
 use crate::{
     ai::{
-        LimitedTime, NoLimit,
+        LimitedTime, NoLimit, TimeLimit,
         evaluation::{Evaluation, PestoEvaluation},
         negamax::{AI, MAX_SEARCH_DEPTH, PvArray},
     },
-    board::{
-        bitboard::Square,
-        board::{Board, CastlingRights, Color, Piece, PieceType},
-    },
+    board::board::{Board, CastlingRights, Color, Piece, PieceType},
     moves::{
-        leapers::KNIGHT_ATK_TABLE,
-        move_generator::{MoveGenerator, MoveList, Undo},
+        move_generator::{MoveGenerator, Undo},
         move_structs::{Move, MoveType},
         sliders::CASTLING_MASK,
         traits::{Black, Castle, PawnDirection, Side, White},
     },
-    tt::{
-        transposition_table::{TT, TT_DEFAULT_SIZE_MB},
-        zobrist::ZobristHasher,
-    },
+    tt::{transposition_table::TT, zobrist::ZobristHasher},
     uci::{
         handler::StopFlag,
-        structs::{GoTimeParams, InfoParams, UciOut},
+        structs::{EngineOption, GoTimeParams, InfoParams, UciOut},
     },
 };
-
 #[derive(Clone)]
 pub struct Engine {
     board: Board,
     move_gen: MoveGenerator,
-    depth: u8,
     tx: Option<Sender<UciOut>>,
     tt: Arc<Mutex<TT>>,
+    options: EngineOptions,
 }
+#[derive(Clone, Debug)]
+pub struct EngineOptions {
+    pub multi_pv: usize,
+}
+
 impl Default for Engine {
     fn default() -> Self {
         MoveGenerator::init_slider_atk_tables();
         Self {
             board: Board::default(),
             move_gen: MoveGenerator::default(),
-            depth: 7,
             tx: None,
             tt: Arc::new(Mutex::new(TT::default())),
+            options: EngineOptions::default(),
         }
     }
 }
+
+impl Default for EngineOptions {
+    fn default() -> Self {
+        EngineOptions { multi_pv: 1 }
+    }
+}
+
 impl Engine {
     pub fn set_board(&mut self, board: Board) {
         self.board = board;
@@ -97,39 +97,20 @@ impl Engine {
             Arc::clone(&self.tt),
         );
 
-        while !aborted {
+        while !ai.aborted() {
             if ai.stop().load(Ordering::Relaxed) || current_depth as usize >= MAX_SEARCH_DEPTH {
                 break;
             }
-            let (current_best_move, evaluation) = ai.make_decision(current_depth, &mut self.board);
-            let time_passed = time_started.elapsed().as_millis();
-            if ai.aborted() && best_move.is_some() {
-                break; // dont send the move that it aborted on
-            }
-            if let Some(tx) = &self.tx {
-                let pv = self.find_pv(ai.pv_array());
-                let uci_params = InfoParams {
-                    nodes_searched: ai.nodes_searched(),
-                    pv: pv,
-                    curr_depth: current_depth,
-                    evaluation,
-                    time: time_passed,
-                };
-                if !ai.aborted() {
-                    tx.send(UciOut::Info(uci_params)).unwrap();
-                }
-            }
-            best_move = current_best_move;
+            best_move = self.go(current_depth, &mut ai);
             current_depth += 1;
         }
         best_move
     }
-    pub fn go(&mut self, max_depth: u8, stop: StopFlag) -> Option<Move> {
+    pub fn go_depth(&mut self, max_depth: u8, stop: StopFlag) -> Option<Move> {
         let max_depth = u8::min(max_depth, MAX_SEARCH_DEPTH as u8);
         let aborted = false;
         let nodes_searched = 0;
         let mut best_move: Option<Move> = None;
-        let time_started = Instant::now();
         let time_limit = NoLimit;
         let mut ai = AI::new(
             aborted,
@@ -140,25 +121,44 @@ impl Engine {
             self.tt.clone(),
         );
         for current_depth in 1..=max_depth {
-            let (current_best_move, evaluation) = ai.make_decision(current_depth, &mut self.board);
+            if ai.stop().load(Ordering::Relaxed) || current_depth as usize >= MAX_SEARCH_DEPTH {
+                break;
+            }
+            best_move = self.go(current_depth, &mut ai);
+        }
+        best_move
+    }
+    pub fn go<T: TimeLimit>(&mut self, current_depth: u8, ai: &mut AI<T>) -> Option<Move> {
+        let time_started = Instant::now();
+        let mut best_move: Option<Move> = None;
+        let mut info_params_list = Vec::with_capacity(self.options.multi_pv);
+        let mut moves_to_ignore = Vec::new();
+        for pv_num in 0..self.options.multi_pv {
+            let (current_best_move, evaluation) =
+                ai.make_decision(current_depth, &mut self.board, Some(&moves_to_ignore));
             let time_elapsed = time_started.elapsed().as_millis();
             if ai.aborted() && best_move.is_some() {
                 break;
             }
-            if let Some(tx) = &self.tx {
-                let pv = self.find_pv(ai.pv_array());
-                let uci_params = InfoParams {
-                    nodes_searched: ai.nodes_searched(),
-                    pv,
-                    curr_depth: current_depth,
-                    evaluation,
-                    time: time_elapsed,
-                };
-                if !ai.aborted() {
-                    tx.send(UciOut::Info(uci_params)).unwrap();
-                }
+            let pv = self.find_pv(ai.pv_array());
+            let uci_params = InfoParams {
+                nodes_searched: ai.nodes_searched(),
+                multi_pv: pv_num + 1,
+                pv,
+                curr_depth: current_depth,
+                evaluation,
+                time: time_elapsed,
+            };
+            info_params_list.push(uci_params);
+            if pv_num == 0 {
+                best_move = current_best_move;
             }
-            best_move = current_best_move;
+            moves_to_ignore.push(current_best_move?);
+        }
+        if let Some(tx) = &self.tx {
+            if !ai.aborted() {
+                tx.send(UciOut::Info(info_params_list)).unwrap();
+            }
         }
         best_move
     }
@@ -175,40 +175,6 @@ impl Engine {
             })
             .collect()
     }
-    //    pub fn find_pv(&self, at_depth: u8) -> Vec<Move> {
-    //        let mut board_copy = self.board.clone();
-    //        let mut current_depth = 0;
-    //        let mut pv_line = vec![];
-    //        while current_depth < at_depth {
-    //            if let Some(mv) = self.tt.lock().unwrap().get(board_copy.zobrist) {
-    //                let mut move_list = MoveList::default();
-    //                self.move_gen.generate_moves(&mut move_list, &board_copy);
-    //
-    //                if !move_list
-    //                    .as_slice()
-    //                    .iter()
-    //                    .any(|ext_mv| ext_mv.mv == mv.best_move())
-    //                {
-    //                    break;
-    //                }
-    //
-    //                pv_line.push(mv.best_move());
-    //                make_move_non_generic(&mut board_copy, mv.best_move());
-    //                if (board_copy.is_draw()) {
-    //                    break;
-    //                }
-    //                board_copy.swap_side();
-    //            } else {
-    //                break;
-    //            }
-    //            current_depth += 1;
-    //        }
-    //        pv_line
-    //    }
-
-    pub fn set_depth(&mut self, depth: u8) {
-        self.depth = depth;
-    }
 
     pub fn board(&self) -> &Board {
         &self.board
@@ -219,6 +185,12 @@ impl Engine {
 
     pub fn tt_mut(&mut self) -> &mut Arc<Mutex<TT>> {
         &mut self.tt
+    }
+
+    pub fn set_option(&mut self, option: EngineOption) {
+        match option {
+            EngineOption::MultiPV(val) => self.options.multi_pv = val,
+        }
     }
 }
 

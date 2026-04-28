@@ -66,8 +66,12 @@ impl<T: TimeLimit> AI<T> {
         self.nodes_searched = 0;
         self.time_limit.restart()
     }
-    pub fn make_decision(&mut self, current_depth: u8, board: &mut Board) -> (Option<Move>, i16) {
-        // init variables
+    pub fn make_decision(
+        &mut self,
+        current_depth: u8,
+        board: &mut Board,
+        ignore_move: Option<&Vec<Move>>,
+    ) -> (Option<Move>, i16) {
         let mut best_mv: Option<Move> = None;
         let mut max = -32000;
         let mut alpha = max; // lower bound of our search window - the score that we are guaranteed
@@ -99,7 +103,7 @@ impl<T: TimeLimit> AI<T> {
             return (None, 0);
         }
         // score moves
-        move_list.score_moves(board, 0, &self.killer_moves, tt_move);
+        move_list.score_moves(board, 0, &self.killer_moves, tt_move, ignore_move);
         // find the best move in the array [i..n], put it at ith position and increment i
         let moves = move_list.move_fetcher();
         for mv in moves {
@@ -255,7 +259,7 @@ impl<T: TimeLimit> AI<T> {
 
         self.move_generator
             .generate_moves_generic::<S>(&mut move_list, board);
-        move_list.score_moves(board, ply, &self.killer_moves, tt_move);
+        move_list.score_moves(board, ply, &self.killer_moves, tt_move, None);
         let mut legal_moves = 0;
         let moves = move_list.move_fetcher();
         for mv in moves {

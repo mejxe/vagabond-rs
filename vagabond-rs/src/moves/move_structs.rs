@@ -91,6 +91,14 @@ pub struct ExtMove {
     pub mv: Move,
     pub score: u16,
 }
+impl Default for ExtMove {
+    fn default() -> Self {
+        ExtMove {
+            mv: Move::default(),
+            score: 0,
+        }
+    }
+}
 impl ExtMove {
     pub fn score_move(&mut self, board: &Board, ply: u8, killers: &[[Option<Move>; 2]; 64]) {
         let move_type = self.mv.move_type();

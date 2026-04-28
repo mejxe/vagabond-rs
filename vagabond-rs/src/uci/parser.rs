@@ -9,7 +9,7 @@ use crate::{
     },
 };
 
-use super::structs::{GoTimeParams, UciIn};
+use super::structs::{EngineOption, GoTimeParams, MAX_MULTI_PV, UciIn};
 
 #[derive(Debug)]
 pub struct Parser;
@@ -26,6 +26,7 @@ impl Parser {
             Some("stop") => Some(UciIn::Stop),
             Some("newgame") => Some(UciIn::NewGame),
             Some("g") => Some(UciIn::Board),
+            Some("setoption") => Self::parse_options(words.collect()),
             Some("quit") => Some(UciIn::Exit),
             _ => None,
         }
@@ -115,5 +116,27 @@ impl Parser {
                 });
         }
         Some(UciIn::Position(entry_board))
+    }
+    pub fn parse_options(words: Vec<&str>) -> Option<UciIn> {
+        let mut i = 0;
+        let mut options = Vec::new();
+        while i < words.len() {
+            match &words[i..] {
+                ["name", "MultiPV", "value", num_str, ..] => {
+                    if let Ok(num) = num_str.parse::<usize>() {
+                        if num > MAX_MULTI_PV {
+                            return None;
+                        }
+                        options.push(EngineOption::MultiPV(num));
+
+                        i += 4;
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        Some(UciIn::SetOption(options))
     }
 }
