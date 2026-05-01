@@ -2,5 +2,6 @@
 name = "vagabond-rs"
 version = "0.1.0"
 edition = "2024"
+repository = "https://github.com/mejxe/vagabond-rs"
 [dependencies]
 macros = {path = "../macros"}

@@ -98,8 +98,6 @@ impl<T: TimeLimit> AI<T> {
         // if there is a 3-fold draw at root return a random move
         if board.is_draw() {
             self.aborted = true;
-            //return (Some(move_list.moves.first().unwrap().mv), 0);
-
             return (None, 0);
         }
         // score moves
@@ -200,7 +198,7 @@ impl<T: TimeLimit> AI<T> {
                 return 0;
             };
         };
-        if board.is_draw(3) {
+        if board.is_draw() {
             self.pv_array.init_node(ply);
             return 0;
         }

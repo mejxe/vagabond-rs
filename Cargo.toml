@@ -4,4 +4,15 @@ members = [
     "vagabond-rs",
     "macros",
 ]
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/mejxe/vagabond-rs"
+authors = ["mejxe"]
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
 
