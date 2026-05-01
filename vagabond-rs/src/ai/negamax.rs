@@ -96,7 +96,7 @@ impl<T: TimeLimit> AI<T> {
         self.move_generator.generate_moves(&mut move_list, board);
 
         // if there is a 3-fold draw at root return a random move
-        if board.is_draw(3) {
+        if board.is_draw() {
             self.aborted = true;
             //return (Some(move_list.moves.first().unwrap().mv), 0);
 

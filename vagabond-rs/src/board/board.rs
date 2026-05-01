@@ -324,14 +324,14 @@ impl Board {
     }
 
     #[inline(always)]
-    pub fn is_draw(&self, max_repetitions: usize) -> bool {
+    pub fn is_draw(&self) -> bool {
         // max_repetitions - how many times a board can repeat before being flagged
         // check for 50 non capture moves
         if self.half_move_clock >= 100 {
             return true;
         }
         // check for 3 fold draw
-        if self.num_repetitions() >= max_repetitions {
+        if self.num_repetitions() >= 3 {
             return true;
         }
         let pawns = self.pieces[Color::White][PieceType::Pawn as usize].0
